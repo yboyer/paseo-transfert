@@ -187,3 +187,77 @@ test('a checkout with all files staged for deletion can be transferred', async t
   assert.equal(snapshot.entries.length, 0);
   assert.equal(contentDigest(await capture(result.directory)), contentDigest(snapshot));
 });
+
+test('existing project receives the exact source commit on a new branch without changing its checkout or refs', async t => {
+  const { root, source } = await fixture(t);
+  const project = path.join(root, 'mbp-project');
+  await git(root, ['-c', 'protocol.file.allow=always', 'clone', source, project]);
+  await git(project, ['config', 'user.name', 'Test']);
+  await git(project, ['config', 'user.email', 'test@example.com']);
+  await writeFile(path.join(project, 'mbp-only.txt'), 'destination-only commit');
+  await git(project, ['add', 'mbp-only.txt']);
+  await git(project, ['commit', '-m', 'test: diverge destination history']);
+  const originalHead = await gitText(project, ['rev-parse', 'HEAD']);
+  await writeFile(path.join(project, 'tracked.txt'), 'MBP local work\n');
+  await git(source, ['checkout', '-b', 'feature/A']);
+  await writeFile(path.join(source, 'new-commit.txt'), 'not pushed to any remote');
+  await git(source, ['add', '.']); await git(source, ['commit', '-m', 'test: add source-only commit']);
+  await writeFile(path.join(source, 'tracked.txt'), 'staged source work\n');
+  await git(source, ['add', 'tracked.txt']);
+  await writeFile(path.join(source, 'tracked.txt'), 'unstaged source work\n');
+  await writeFile(path.join(source, 'untracked.txt'), 'untracked source work');
+  // The same branch already exists and is in use on the destination.
+  await git(project, ['branch', 'feature/A']);
+  await git(project, ['switch', 'feature/A']);
+  const originalRefs = await gitText(project, ['show-ref']);
+  const originalStatus = await gitText(project, ['status', '--porcelain']);
+  const { snapshot, data } = await archive(source);
+  const target = path.join(root, 'received-project'); await mkdir(target);
+  const restored = await restore(target, data, project);
+  assert.equal(await gitText(restored.directory, ['rev-parse', 'HEAD']), snapshot.head);
+  assert.notEqual(snapshot.head, originalHead);
+  assert.match(restored.branch, /^transfert\/feature-A-/);
+  assert.equal(await gitText(project, ['symbolic-ref', '--short', 'HEAD']), 'feature/A');
+  assert.equal(await gitText(project, ['rev-parse', 'HEAD']), originalHead);
+  assert.equal(await gitText(project, ['status', '--porcelain']), originalStatus);
+  assert.equal(await readFile(path.join(project, 'tracked.txt'), 'utf8'), 'MBP local work\n');
+  const preservedRefs = (await gitText(project, ['show-ref'])).split('\n').filter(line => !line.endsWith(`refs/heads/${restored.branch}`)).join('\n');
+  assert.equal(preservedRefs, originalRefs);
+  assert.equal(contentDigest(await capture(restored.directory)), contentDigest(snapshot));
+  assert.equal(await gitText(restored.directory, ['show', ':tracked.txt']), 'staged source work');
+  assert.equal(await readFile(path.join(restored.directory, 'tracked.txt'), 'utf8'), 'unstaged source work\n');
+  assert.equal(await gitText(restored.directory, ['rev-parse', '--git-common-dir']), path.join(project, '.git'));
+});
+
+test('an unrelated destination repository is refused without replacing its branches', async t => {
+  const { root, source } = await fixture(t);
+  const project = path.join(root, 'unrelated'); await mkdir(project);
+  await git(project, ['init', '-b', 'main']);
+  await git(project, ['config', 'user.name', 'Test']); await git(project, ['config', 'user.email', 'test@example.com']);
+  await writeFile(path.join(project, 'other.txt'), 'different project');
+  await git(project, ['add', '.']); await git(project, ['commit', '-m', 'test: create unrelated repository']);
+  const refs = await gitText(project, ['show-ref']);
+  const { data } = await archive(source);
+  const target = path.join(root, 'refused'); await mkdir(target);
+  await assert.rejects(restore(target, data, project), /does not share Git history/);
+  assert.equal(await gitText(project, ['show-ref']), refs);
+  assert.equal(await readFile(path.join(project, 'other.txt'), 'utf8'), 'different project');
+});
+
+test('project destinations refuse unknown projects, occupied names and symbolic-link parents', async t => {
+  const { root, source } = await fixture(t);
+  const { projectDestination } = await import('../server/projects');
+  const project = { id: 'project-source', name: 'Source project', directory: source };
+  const target = await projectDestination(project, 'copy');
+  assert.equal(target.projectId, project.id);
+  assert.equal(target.repository, source);
+  assert.equal(target.root.startsWith(source + path.sep), false);
+  const receiver = new Receiver();
+  t.after(async () => receiver.dispose());
+  await assert.rejects(receiver.begin({ id: randomUUID(), projectId: 'missing', name: 'copy', bytes: 1, digest: sha256('x') }, project), /unavailable/);
+  await receiver.begin({ id: randomUUID(), projectId: project.id, name: 'copy', bytes: 1, digest: sha256('x') }, project);
+  await assert.rejects(projectDestination(project, 'copy'), /already exists/);
+  await rm(path.join(root, '.paseo-transfers'), { recursive: true });
+  await symlink(source, path.join(root, '.paseo-transfers'));
+  await assert.rejects(projectDestination(project, 'other'), /Unsafe parent/);
+});

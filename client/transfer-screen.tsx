@@ -3,8 +3,8 @@ import { usePaseo, useRpc } from '@getpaseo/plugin/client';
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import {
-  targetsRpc, previewRpc, inspectDestinationRpc, startRpc, statusRpc, archiveSourceRpc,
-  type Preview, type Job,
+  targetsRpc, previewRpc, inspectDestinationRpc, startRpc, statusRpc, archiveSourceRpc, destinationProjectsRpc,
+  type Preview, type Job, type Project, type DestinationInput,
 } from '../shared/transfer';
 
 function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
@@ -17,6 +17,7 @@ export function TransferScreen(props: PluginScreenProps) {
 function TransferForm({ theme, layout, params, host, navigation }: PluginScreenProps) {
   const paseo = usePaseo();
   const targets = useRpc(targetsRpc);
+  const loadProjects = useRpc(destinationProjectsRpc);
   const prepare = useRpc(previewRpc);
   const inspect = useRpc(inspectDestinationRpc);
   const start = useRpc(startRpc);
@@ -27,11 +28,16 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
   const [hosts, setHosts] = useState<{ serverId: string; label: string }[]>([]);
   const [workspaceId, setWorkspaceId] = useState(params.workspaceId || '');
   const [serverId, setServerId] = useState('');
+  const [useExistingProject, setUseExistingProject] = useState(true);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectId, setProjectId] = useState('');
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [projectError, setProjectError] = useState('');
   const [parent, setParent] = useState('');
-  const [name, setName] = useState('');
+  const [name, setName] = useState(() => `transfer-${Date.now().toString(36)}`);
   const [move, setMove] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);
-  const [destination, setDestination] = useState<{ root: string; repository: string; worktreeParent: string } | null>(null);
+  const [destination, setDestination] = useState<{ root: string; repository: string; worktreeParent: string; projectId?: string; projectName?: string } | null>(null);
   const [job, setJob] = useState<Job | null>(null);
   const [jobId, setJobId] = useState('');
   const [busy, setBusy] = useState(false);
@@ -39,6 +45,8 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const sourceAvailable = sources.some(source => source.id === workspaceId);
+  const target: DestinationInput = useExistingProject ? { projectId, name } : { parent, name };
+  const destinationReady = !!serverId && !!name && (useExistingProject ? !!projectId && !projectsLoading && !projectError : !!parent);
   const running = job?.phase === 'sending' || job?.phase === 'restoring';
   const locked = busy || !!running;
   const colors = theme.colors;
@@ -93,6 +101,17 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
     return () => { cancelled = true; };
   }, [paseo, targets, params.workspaceId]);
   useEffect(() => {
+    let cancelled = false;
+    setProjects([]); setProjectId(''); setProjectError(''); setPreview(null); setDestination(null);
+    if (!serverId) { setProjectsLoading(false); return; }
+    setProjectsLoading(true);
+    void loadProjects({ serverId }).then(available => {
+      if (!cancelled) setProjects(available);
+    }).catch(failure => { if (!cancelled) setProjectError(message(failure)); })
+      .finally(() => { if (!cancelled) setProjectsLoading(false); });
+    return () => { cancelled = true; };
+  }, [serverId, loadProjects]);
+  useEffect(() => {
     if (!job || !running) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -136,21 +155,36 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
         <View style={styles.row}>{hosts.map(target => <Button key={target.serverId} label={target.label} selected={serverId === target.serverId} disabled={locked}
           onPress={() => { setServerId(target.serverId); setParent(''); invalidate(); }} />)}</View>
         {!loading && !hosts.length && <Text style={styles.muted}>Connect another host to the source daemon in Paseo. Install Transfer on both hosts.</Text>}
-        <Text style={styles.text}>Existing parent directory on the destination host</Text>
-        <TextInput accessibilityLabel="Destination parent directory" value={parent} editable={!locked} onChangeText={value => { setParent(value); invalidate(); }} placeholder="/Users/you/Code" placeholderTextColor={colors.foregroundMuted} autoCapitalize="none" autoCorrect={false} style={styles.input} />
-        <Text style={styles.text}>New folder name</Text>
-        <TextInput accessibilityLabel="New folder name" value={name} editable={!locked} onChangeText={value => { setName(value); invalidate(); }} placeholder="my-local-project" placeholderTextColor={colors.foregroundMuted} autoCapitalize="none" autoCorrect={false} style={styles.input} />
-        <Text style={styles.muted}>This folder will contain the Git repository and a worktree. The plugin will create a Paseo workspace for this worktree.</Text>
+        <View style={styles.row}>
+          <Button label="Existing project" selected={useExistingProject} disabled={locked} onPress={() => { setUseExistingProject(true); invalidate(); }} />
+          <Button label="Separate copy" selected={!useExistingProject} disabled={locked} onPress={() => { setUseExistingProject(false); invalidate(); }} />
+        </View>
+        {useExistingProject ? <>
+          {projectsLoading && <Text style={styles.muted}>Loading destination projects…</Text>}
+          {!!projectError && <Text accessibilityRole="alert" selectable style={{ ...styles.text, color: colors.statusDanger }}>{projectError}</Text>}
+          {!!serverId && !projectsLoading && !projectError && !projects.length && <Text style={styles.muted}>No Git projects are registered on this host. Add the project in Paseo or choose Separate copy.</Text>}
+          {projects.map(project => <Pressable key={project.id} disabled={locked} accessibilityRole="button" accessibilityLabel={`Select project ${project.name}`} accessibilityState={{ selected: projectId === project.id }}
+            onPress={() => { setProjectId(project.id); invalidate(); }} style={{ padding: 12, gap: 3, borderWidth: 1, borderColor: projectId === project.id ? colors.accent : colors.border, borderRadius: 8 }}>
+            <Text style={styles.text}>{project.name}</Text><Text selectable style={styles.muted}>{project.directory}</Text>
+          </Pressable>)}
+          <Text style={styles.muted}>A new branch will start at the exact source commit. A new worktree and workspace will be added to the selected project, with your staged and unstaged changes.</Text>
+        </> : <>
+          <Text style={styles.text}>Existing parent directory on the destination host</Text>
+          <TextInput accessibilityLabel="Destination parent directory" value={parent} editable={!locked} onChangeText={value => { setParent(value); invalidate(); }} placeholder="/Users/you/Code" placeholderTextColor={colors.foregroundMuted} autoCapitalize="none" autoCorrect={false} style={styles.input} />
+          <Text style={styles.muted}>A separate Git repository and worktree will be created in a new folder.</Text>
+        </>}
+        <Text style={styles.text}>{useExistingProject ? 'New workspace name' : 'New folder name'}</Text>
+        <TextInput accessibilityLabel="New workspace name" value={name} editable={!locked} onChangeText={value => { setName(value); invalidate(); }} placeholder="my-local-project" placeholderTextColor={colors.foregroundMuted} autoCapitalize="none" autoCorrect={false} style={styles.input} />
       </View>
       <View style={styles.card}>
         <Text style={styles.heading}>3. Action</Text>
         <View style={styles.row}><Button label="Copy" selected={!move} disabled={locked} onPress={() => setMove(false)} /><Button label="Move" selected={move} disabled={locked} onPress={() => setMove(true)} /></View>
         <Text style={styles.muted}>{move ? 'The plugin copies and verifies the files. You will then confirm source archiving.' : 'The source remains available. The two copies are independent.'}</Text>
-        <Button label={busy ? 'Preparing…' : 'Show preview'} disabled={locked || !sourceAvailable || !serverId || !parent || !name} onPress={() => void perform(async () => {
+        <Button label={busy ? 'Preparing…' : 'Show preview'} disabled={locked || !sourceAvailable || !destinationReady} onPress={() => void perform(async () => {
           invalidate();
-          const target = await inspect({ serverId, parent, name });
+          const inspected = await inspect({ serverId, ...target });
           const result = await prepare({ workspaceId });
-          setDestination(target); setPreview(result);
+          setDestination(inspected); setPreview(result);
         })} />
       </View>
       {preview && destination && <View style={styles.card}>
@@ -158,6 +192,7 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
         <Text selectable style={styles.text}>{preview.title} · {preview.branch} · {preview.head.slice(0, 12)}</Text>
         <Text style={styles.text}>{preview.files.length} files · {formatBytes(preview.bytes)}, including Git history</Text>
         <Text selectable style={styles.muted}>Source: {preview.directory}</Text>
+        {destination.projectName && <Text selectable style={styles.muted}>Project: {destination.projectName}</Text>}
         <Text selectable style={styles.muted}>Destination: {destination.root}</Text>
         <Text selectable style={styles.muted}>Worktree: {destination.worktreeParent}</Text>
         <Text style={styles.muted}>Staged changes are preserved. Conversations and Git-ignored files are excluded.</Text>
@@ -169,7 +204,7 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
         <ScrollView style={{ maxHeight: 180 }}>{preview.files.map(file => <Text key={file} selectable style={styles.muted}>{file}</Text>)}</ScrollView>
         <Text style={styles.muted}>The preview expires after 15 minutes. Existing folders will not be overwritten.</Text>
         <Button label={move ? 'Copy before moving' : 'Confirm copy'} selected disabled={locked || (move && preview.ignored.length > 0)} onPress={() => void perform(async () => {
-          const created = await start({ previewId: preview.id, serverId, parent, name });
+          const created = await start({ previewId: preview.id, serverId, ...target });
           setJob(created); setJobId(created.id);
         })} />
       </View>}
@@ -183,6 +218,7 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
       {job.phase === 'failed' && <Text style={styles.muted}>The source is preserved. A partial folder may remain at the destination. Use a new folder to retry.</Text>}
       {job.receipt && <>
         <Text selectable style={styles.text}>{job.receipt.directory}</Text>
+        {!!job.receipt.branch && <Text selectable style={styles.muted}>New branch: {job.receipt.branch}</Text>}
         {!!navigation && <Button label="Open destination workspace" onPress={() => navigation.openWorkspace({ workspaceId: job.receipt!.workspaceId, serverId: job.destinationServerId })} />}
         {!job.sourceArchived && <>
           <Text style={styles.heading}>Move: archive the source</Text>

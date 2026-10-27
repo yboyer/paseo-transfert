@@ -2,9 +2,10 @@ import { mkdir, lstat, realpath, readFile, writeFile, rm, chmod, symlink } from 
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { archiveSchema, MAX_BYTES, CHUNK_BYTES, type Receipt, type Snapshot } from '../shared/transfer';
-import { git, nulList } from './git';
-import { assertParents, capture, safeRelative, sha256, validateLink } from './snapshot';
+import { archiveSchema, MAX_BYTES, CHUNK_BYTES, type Receipt, type Snapshot, type DestinationInput, type Project } from '../shared/transfer';
+import { git, gitText } from './git';
+import { assertParents, capture, safeRelative, sha256, validateLink, sourceDirectory } from './snapshot';
+import { projectDestination } from './projects';
 
 export async function destination(parent: string, name: string) {
   if (!path.isAbsolute(parent) || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/.test(name)) throw new Error('Choose an absolute parent directory and a simple folder name.');
@@ -22,7 +23,7 @@ export function contentDigest(snapshot: Snapshot) {
   return sha256(JSON.stringify({ head: snapshot.head, stagedPatch: snapshot.stagedPatch, entries: snapshot.entries }));
 }
 
-export async function restore(root: string, bytes: Buffer) {
+export async function restore(root: string, bytes: Buffer, existingRepository?: string) {
   if (bytes.length > MAX_BYTES) throw new Error('Transfer exceeds 128 MiB.');
   const archive = archiveSchema.parse(JSON.parse(bytes.toString('utf8')));
   const { snapshot } = archive;
@@ -43,30 +44,31 @@ export async function restore(root: string, bytes: Buffer) {
       parents.pop();
     }
   }
-  const repository = path.join(root, 'repository.git');
+  const repository = existingRepository ?? path.join(root, 'repository.git');
   const directory = path.join(root, 'worktree');
   const bundlePath = path.join(root, '.history.bundle');
   await writeFile(bundlePath, Buffer.from(archive.bundle, 'base64'), { flag: 'wx', mode: 0o600 });
-  await git(root, ['init', '--bare', repository]);
+  if (!existingRepository) await git(root, ['init', '--bare', repository]);
   await git(repository, ['bundle', 'verify', bundlePath]);
-  await git(repository, ['-c', 'protocol.file.allow=always', 'fetch', '--no-write-fetch-head', bundlePath, '+refs/*:refs/*']);
-  // HEAD may be detached and therefore absent from the advertised refs.
-  await git(repository, ['-c', 'protocol.file.allow=always', 'fetch', '--no-write-fetch-head', bundlePath, snapshot.head]);
-  await git(repository, ['worktree', 'add', '-b', `transfert/${randomUUID()}`, directory, snapshot.head]);
-  // Remove checkout contents, then restore the captured filesystem without following links.
-  const baseline = nulList(await git(directory, ['ls-files', '-z']));
-  for (const file of baseline) {
-    await assertParents(directory, file);
-    await rm(path.join(directory, file), { force: true });
+  if (!existingRepository) {
+    await git(repository, ['-c', 'protocol.file.allow=always', 'fetch', '--no-write-fetch-head', bundlePath, '+refs/*:refs/*']);
   }
-  // A file can have replaced a tracked directory. Remove only empty checkout directories.
-  const directories = [...new Set(baseline.flatMap(file => {
-    const segments = file.split('/'); const result: string[] = [];
-    while (segments.length > 1) { segments.pop(); result.push(segments.join('/')); }
-    return result;
-  }))].sort((a, b) => b.length - a.length);
-  const { rmdir } = await import('node:fs/promises');
-  for (const dir of directories) await rmdir(path.join(directory, dir)).catch(error => { if (!['ENOENT', 'ENOTEMPTY'].includes(error.code)) throw error; });
+  // Import objects only in an existing project: never update its branches, tags, or tracking refs.
+  await git(repository, ['-c', 'protocol.file.allow=always', 'fetch', '--no-tags', '--no-recurse-submodules', '--no-write-fetch-head', bundlePath, snapshot.head]);
+  if (existingRepository) {
+    const existingHead = await gitText(repository, ['rev-parse', '--verify', 'HEAD']).catch(() => null);
+    if (existingHead) {
+      await git(repository, ['merge-base', existingHead, snapshot.head]).catch(() => {
+        throw new Error('The selected project does not share Git history with the source. Choose the matching project.');
+      });
+    }
+  }
+  const sourceName = snapshot.branch === 'HEAD' ? 'head' : snapshot.branch.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 50);
+  const branch = `transfert/${sourceName}-${randomUUID()}`;
+  // Do not run checkout filters or project scripts while restoring transferred data.
+  await git(repository, ['worktree', 'add', '--no-checkout', '-b', branch, directory, snapshot.head]);
+  await sourceDirectory(directory);
+  await git(directory, ['read-tree', 'HEAD']);
   for (const entry of snapshot.entries.filter(e => e.kind === 'file')) {
     await assertParents(directory, entry.path);
     const absolute = path.join(directory, entry.path);
@@ -84,22 +86,24 @@ export async function restore(root: string, bytes: Buffer) {
   const restored = await capture(directory);
   if (contentDigest(restored) !== contentDigest(snapshot)) throw new Error('Restored files or Git index do not match the source. The source is unchanged.');
   await rm(bundlePath);
-  return { directory, repository, contentHash: contentDigest(snapshot) };
+  return { directory, repository, branch, contentHash: contentDigest(snapshot) };
 }
 
 type Incoming = {
   id: string; root: string; bytes: number; digest: string; received: number; chunks: Buffer[];
-  busy: boolean; receipt?: Receipt; contentHash?: string; expiresAt: number;
+  projectId?: string; repository?: string; busy: boolean; receipt?: Receipt; contentHash?: string; expiresAt: number;
 };
 export class Receiver {
   private transfers = new Map<string, Incoming>();
-  async begin(input: { id: string; parent: string; name: string; bytes: number; digest: string }) {
+  async begin(input: { id: string; bytes: number; digest: string } & DestinationInput, project?: Project) {
     this.sweep();
     if (this.transfers.size >= 8) throw new Error('Too many incoming transfers. Try again later.');
-    const target = await destination(input.parent, input.name);
+    if ('projectId' in input && project?.id !== input.projectId) throw new Error('Destination project is unavailable.');
+    const target = 'projectId' in input ? await projectDestination(project!, input.name) : await destination(input.parent, input.name);
+    if ('projectId' in input) await mkdir(path.dirname(target.root), { recursive: true, mode: 0o700 });
     await mkdir(target.root, { mode: 0o700 }); // Exclusive reservation; never reuse an occupied destination.
     const token = randomUUID();
-    this.transfers.set(token, { ...input, root: target.root, received: 0, chunks: [], busy: false, expiresAt: Date.now() + 3_600_000 });
+    this.transfers.set(token, { ...input, root: target.root, repository: 'projectId' in input ? target.repository : undefined, received: 0, chunks: [], busy: false, expiresAt: Date.now() + 3_600_000 });
     return { token };
   }
   chunk(input: { token: string; offset: number; data: string }) {
@@ -110,7 +114,7 @@ export class Receiver {
     transfer.chunks.push(data); transfer.received += data.length;
     return { received: transfer.received };
   }
-  async finish(token: string, createWorkspace: (directory: string) => Promise<string>) {
+  async finish(token: string, createWorkspace: (directory: string, projectId?: string) => Promise<string>) {
     const transfer = this.get(token);
     if (transfer.receipt) return transfer.receipt;
     if (transfer.busy) throw new Error('Transfer is already being restored.');
@@ -120,10 +124,10 @@ export class Receiver {
       const data = Buffer.concat(transfer.chunks);
       transfer.chunks = [];
       if (sha256(data) !== transfer.digest) throw new Error('Transfer checksum mismatch.');
-      const restored = await restore(transfer.root, data);
-      const workspaceId = await createWorkspace(restored.directory);
+      const restored = await restore(transfer.root, data, transfer.repository);
+      const workspaceId = await createWorkspace(restored.directory, transfer.projectId);
       transfer.contentHash = restored.contentHash;
-      transfer.receipt = { transferId: transfer.id, digest: transfer.digest, workspaceId, directory: restored.directory, repository: restored.repository };
+      transfer.receipt = { transferId: transfer.id, digest: transfer.digest, workspaceId, directory: restored.directory, repository: restored.repository, branch: restored.branch, ...(transfer.projectId ? { projectId: transfer.projectId } : {}) };
       return transfer.receipt;
     } finally { transfer.busy = false; }
   }

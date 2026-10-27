@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import type { PluginHandlerContext } from '@getpaseo/plugin/server';
 import {
   MAX_BYTES, CHUNK_BYTES, beginRpc, chunkRpc, finishRpc, verifyRpc,
-  type Job, type Preview, type Snapshot,
+  type Job, type Preview, type Snapshot, type DestinationInput,
 } from '../shared/transfer';
 import { git } from './git';
 import { capture, fingerprint, sha256 } from './snapshot';
@@ -64,7 +64,7 @@ export class TransferService {
       return preview;
     } finally { await rm(temporary, { recursive: true, force: true }); }
   }
-  async start(paseo: Paseo, input: { previewId: string; serverId: string; parent: string; name: string }) {
+  async start(paseo: Paseo, input: { previewId: string; serverId: string } & DestinationInput) {
     const prepared = this.prepared.get(input.previewId);
     if (!prepared || Date.parse(prepared.preview.expiresAt) < Date.now() || prepared.consumed) throw new Error('Preview expired or already used. Create a new preview.');
     const { workspaceId, directory } = prepared.preview;
@@ -78,7 +78,7 @@ export class TransferService {
       this.jobs.set(job.id, running);
       this.prepared.delete(input.previewId);
       // Daemon-side job survives closing the plugin screen; status is available until restart/expiry.
-      void this.send(running, input.parent, input.name).finally(() => this.locks.delete(workspaceId));
+      void this.send(running, input).finally(() => this.locks.delete(workspaceId));
       return { ...job };
     } catch (error) { this.locks.delete(workspaceId); throw error; }
   }
@@ -115,7 +115,7 @@ export class TransferService {
     const current = await capture(prepared.preview.directory);
     if (fingerprint(current) !== prepared.preview.fingerprint) throw new Error('The source changed after preview. Create a new preview. Source archiving is blocked.');
   }
-  private async send(running: Running, parent: string, name: string) {
+  private async send(running: Running, destination: DestinationInput) {
     let connection: Awaited<ReturnType<typeof connectDestination>> | undefined;
     try {
       connection = await connectDestination(running.serverId);
@@ -123,7 +123,7 @@ export class TransferService {
       if (this.disposed) throw new Error('Plugin stopped.');
       const { data, preview } = running.prepared;
       const digest = sha256(data);
-      const { token } = await connection.call(beginRpc, { id: preview.id, parent, name, bytes: data.length, digest });
+      const { token } = await connection.call(beginRpc, { ...destination, id: preview.id, bytes: data.length, digest });
       running.token = token;
       for (let offset = 0; offset < data.length; offset += CHUNK_BYTES) {
         if (this.disposed) throw new Error('Plugin stopped.');

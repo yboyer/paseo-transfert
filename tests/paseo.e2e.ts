@@ -12,7 +12,7 @@ import { createPaseoApi } from '@getpaseo/client';
 import type { PluginRpcContract } from '@getpaseo/plugin';
 import type { z } from 'zod';
 import * as rpc from '../shared/transfer';
-import { git } from '../server/git';
+import { git, gitText } from '../server/git';
 
 const exec = promisify(execFile);
 async function port() {
@@ -53,6 +53,8 @@ test('installed plugin copies between two Paseo daemons and safely archives a ma
   t.after(async () => { for (const client of clients) await client.close(); });
   const sourceClient = clients[0]!;
   const destinationClient = clients[1]!;
+  const destinationApi = createPaseoApi(destinationClient);
+  t.after(() => destinationApi.dispose());
   const api = createPaseoApi(sourceClient);
   t.after(() => api.dispose());
   async function call<I extends z.ZodType, O extends z.ZodType>(contract: PluginRpcContract<I, O>, input: z.input<I>) {
@@ -77,6 +79,18 @@ test('installed plugin copies between two Paseo daemons and safely archives a ma
   const source = await api.workspaces.create({ source: { kind: 'worktree', cwd: repository, action: 'branch-off', refName: 'main', branchName: 'feat/test-transfer' } });
   const sourceDirectory = source.directory!;
   assert.ok(sourceDirectory);
+  const destinationRepository = path.join(root, 'mbp-project');
+  await git(root, ['-c', 'protocol.file.allow=always', 'clone', repository, destinationRepository]);
+  await git(destinationRepository, ['switch', '-c', 'feat/test-transfer']);
+  await writeFile(path.join(destinationRepository, 'code.txt'), 'MBP work stays untouched\n');
+  const existingWorkspace = await destinationApi.workspaces.open(destinationRepository);
+  const existingProject = (await call(rpc.destinationProjectsRpc, { serverId })).find(project => project.directory === destinationRepository);
+  assert.ok(existingProject, 'existing destination project is listed');
+  const destinationHead = await gitText(destinationRepository, ['rev-parse', 'HEAD']);
+  await writeFile(path.join(sourceDirectory, 'source-only.txt'), 'source commit not present on the MBP');
+  await git(sourceDirectory, ['add', 'source-only.txt']);
+  await git(sourceDirectory, ['commit', '-m', 'test: add source-only commit']);
+
   await writeFile(path.join(sourceDirectory, 'code.txt'), 'staged\n');
   await git(sourceDirectory, ['add', 'code.txt']);
   await writeFile(path.join(sourceDirectory, 'code.txt'), 'unstaged\n');
@@ -96,9 +110,33 @@ test('installed plugin copies between two Paseo daemons and safely archives a ma
   assert.ok(job.receipt);
   await assert.rejects(access(path.join(job.receipt.directory, 'setup-must-not-run')), /ENOENT/);
   assert.equal(await readFile(path.join(job.receipt.directory, 'code.txt'), 'utf8'), 'unstaged\n');
-  const destinationApi = createPaseoApi(destinationClient);
-  t.after(() => destinationApi.dispose());
   assert.ok(await destinationApi.workspaces.ref(job.receipt.workspaceId).refresh());
+  const projectTarget = await call(rpc.inspectDestinationRpc, { serverId, projectId: existingProject.id, name: 'project-transfer' });
+  assert.equal(projectTarget.projectId, existingProject.id);
+  assert.equal(projectTarget.repository, destinationRepository);
+  const projectPreview = await call(rpc.previewRpc, { workspaceId: source.id });
+  const projectStarted = await call(rpc.startRpc, { previewId: projectPreview.id, serverId, projectId: existingProject.id, name: 'project-transfer' });
+  let projectJob = projectStarted;
+  for (let attempt = 0; attempt < 160; attempt++) {
+    projectJob = await call(rpc.statusRpc, { id: projectStarted.id });
+    if (['complete', 'failed'].includes(projectJob.phase)) break;
+    await pause(250);
+  }
+  assert.equal(projectJob.phase, 'complete', projectJob.error || 'transfer into existing project finishes');
+  assert.ok(projectJob.receipt);
+  assert.equal(projectJob.receipt.projectId, existingProject.id);
+  assert.match(projectJob.receipt.branch!, /^transfert\/feat-test-transfer-/);
+  const projectWorkspace = await destinationApi.workspaces.ref(projectJob.receipt.workspaceId).refresh();
+  assert.equal(projectWorkspace?.projectId, existingProject.id);
+  assert.notEqual(projectJob.receipt.workspaceId, existingWorkspace.id);
+  assert.equal(await gitText(projectJob.receipt.directory, ['rev-parse', 'HEAD']), preview.head);
+  assert.equal(await gitText(projectJob.receipt.directory, ['rev-parse', '--git-common-dir']), path.join(destinationRepository, '.git'));
+  assert.equal(await readFile(path.join(projectJob.receipt.directory, 'code.txt'), 'utf8'), 'unstaged\n');
+  assert.equal(await gitText(projectJob.receipt.directory, ['show', ':code.txt']), 'staged');
+  assert.equal(await gitText(destinationRepository, ['rev-parse', 'HEAD']), destinationHead);
+  assert.equal(await readFile(path.join(destinationRepository, 'code.txt'), 'utf8'), 'MBP work stays untouched\n');
+  await assert.rejects(access(path.join(projectJob.receipt.directory, 'setup-must-not-run')), /ENOENT/);
+
   await writeFile(path.join(job.receipt.directory, 'code.txt'), 'changed on destination');
   await assert.rejects(call(rpc.archiveSourceRpc, { id: job.id, confirm: true }), /destination changed/);
   await access(sourceDirectory);

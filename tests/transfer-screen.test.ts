@@ -15,9 +15,11 @@ test('transfer screen renders outside a workspace panel and stays scoped when th
   ];
   const refreshed: string[] = [];
   let listCalls = 0;
+  const inspected: Record<string, unknown>[] = [];
+  const started: Record<string, unknown>[] = [];
   const runtime = globalThis as unknown as {
     IS_REACT_ACT_ENVIRONMENT: boolean;
-    transfertScreenTest: { api: unknown; targets: () => Promise<unknown[]> };
+    transfertScreenTest: { api: unknown; rpc: Record<string, (input: Record<string, unknown>) => Promise<unknown>> };
   };
   runtime.IS_REACT_ACT_ENVIRONMENT = true;
   runtime.transfertScreenTest = {
@@ -25,7 +27,19 @@ test('transfer screen renders outside a workspace panel and stays scoped when th
       ref: (id: string) => ({ refresh: async () => { refreshed.push(id); return workspaces.find(workspace => workspace.id === id) ?? null; } }),
       list: async () => { listCalls++; return { entries: workspaces, pageInfo: {} }; },
     } },
-    targets: async () => [],
+    rpc: {
+      'transfer.targets': async () => [{ serverId: 'mbp', label: 'MBP' }],
+      'transfer.destination-projects': async () => [{ id: 'project-one', name: 'MBP Project', directory: '/Users/you/Code/project' }],
+      'transfer.inspect-destination': async input => {
+        inspected.push(input);
+        return { root: '/Users/you/Code/.paseo-transfers/copy', repository: '/Users/you/Code/project', worktreeParent: '/Users/you/Code/.paseo-transfers/copy/worktree', projectId: input.projectId, projectName: 'MBP Project' };
+      },
+      'transfer.preview': async () => ({ id: 'preview', title: 'Workspace One', directory: '/code/one', branch: 'feature/A', head: 'a'.repeat(40), bytes: 100, files: ['code.txt'], ignored: [] }),
+      'transfer.start': async input => {
+        started.push(input);
+        return { id: 'job', destinationServerId: 'mbp', phase: 'complete', sent: 100, total: 100, error: null, sourceArchived: false, receipt: { workspaceId: 'received', directory: '/Users/you/Code/.paseo-transfers/copy/worktree', branch: 'transfert/feature-A-unique' } };
+      },
+    },
   };
   const temporary = await mkdtemp(path.join(process.cwd(), 'node_modules', '.transfert-screen-test-'));
   t.after(async () => { delete (globalThis as Record<string, unknown>).transfertScreenTest; await rm(temporary, { recursive: true, force: true }); });
@@ -42,7 +56,7 @@ test('transfer screen renders outside a workspace panel and stays scoped when th
         : `export { useWorkspace } from ${JSON.stringify(stateModule)};
            export function usePaseo() { return globalThis.transfertScreenTest.api; }
            const unused = async () => { throw new Error('Unexpected RPC'); };
-           export function useRpc(contract) { return contract.name === 'transfer.targets' ? globalThis.transfertScreenTest.targets : unused; }`,
+           export function useRpc(contract) { return globalThis.transfertScreenTest.rpc[contract.name] || unused; }`,
       }));
     } }],
   });
@@ -61,6 +75,23 @@ test('transfer screen renders outside a workspace panel and stays scoped when th
   assert.doesNotMatch(JSON.stringify(screen.toJSON()), /Workspace Two/);
   assert.deepEqual(refreshed, ['one']);
   assert.equal(listCalls, 0);
+  assert.match(JSON.stringify(screen.toJSON()), /MBP Project/);
+  assert.match(JSON.stringify(screen.toJSON()), /Users\/you\/Code\/project/);
+  assert.equal(screen.root.findByProps({ accessibilityLabel: 'Show preview' }).props.disabled, true);
+  await act(async () => { screen.root.findByProps({ accessibilityLabel: 'Select project MBP Project' }).props.onPress(); });
+  assert.equal(screen.root.findByProps({ accessibilityLabel: 'Show preview' }).props.disabled, false);
+  await act(async () => { screen.root.findByProps({ accessibilityLabel: 'Show preview' }).props.onPress(); });
+  assert.equal(inspected.length, 1);
+  assert.equal(inspected[0]!.projectId, 'project-one');
+  assert.equal(inspected[0]!.serverId, 'mbp');
+  assert.equal('parent' in inspected[0]!, false);
+  assert.match(JSON.stringify(screen.toJSON()), /feature\/A/);
+  await act(async () => { screen.root.findByProps({ accessibilityLabel: 'Confirm copy' }).props.onPress(); });
+  assert.equal(started.length, 1);
+  assert.equal(started[0]!.projectId, 'project-one');
+  assert.equal(started[0]!.previewId, 'preview');
+  assert.equal('parent' in started[0]!, false);
+  assert.match(JSON.stringify(screen.toJSON()), /transfert\/feature-A-unique/);
 
   await act(async () => { screen.update(createElement(TransferScreen, { ...props, params: { workspaceId: 'two' } })); });
   assert.match(JSON.stringify(screen.toJSON()), /Workspace Two/);

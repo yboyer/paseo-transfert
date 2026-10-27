@@ -44,6 +44,8 @@ export const receiptSchema = z.object({
   workspaceId: z.string(),
   directory: z.string(),
   repository: z.string(),
+  branch: z.string().optional(),
+  projectId: z.string().optional(),
 });
 export type Receipt = z.infer<typeof receiptSchema>;
 export const jobSchema = z.object({
@@ -65,18 +67,31 @@ export const targetsRpc = defineRpc({
 export const previewRpc = defineRpc({
   name: 'transfer.preview', input: z.object({ workspaceId: z.string() }), output: previewSchema,
 });
+export const projectSchema = z.object({ id: z.string(), name: z.string(), directory: z.string() });
+export type Project = z.infer<typeof projectSchema>;
+export const projectsRpc = defineRpc({ name: 'transfer.projects', input: z.object({}), output: z.array(projectSchema) });
+export const destinationProjectsRpc = defineRpc({
+  name: 'transfer.destination-projects', input: z.object({ serverId: z.string() }), output: projectsRpc.output,
+});
+export const destinationInputSchema = z.union([
+  z.object({ projectId: z.string().min(1), name: z.string() }),
+  z.object({ parent: z.string(), name: z.string() }),
+]);
+export type DestinationInput = z.infer<typeof destinationInputSchema>;
+export const destinationSchema = z.object({
+  root: z.string(), repository: z.string(), worktreeParent: z.string(),
+  projectId: z.string().optional(), projectName: z.string().optional(),
+});
 export const destinationRpc = defineRpc({
-  name: 'transfer.destination', input: z.object({ parent: z.string(), name: z.string() }),
-  output: z.object({ root: z.string(), repository: z.string(), worktreeParent: z.string() }),
+  name: 'transfer.destination', input: destinationInputSchema, output: destinationSchema,
 });
 export const inspectDestinationRpc = defineRpc({
   name: 'transfer.inspect-destination',
-  input: z.object({ serverId: z.string(), parent: z.string(), name: z.string() }),
-  output: destinationRpc.output,
+  input: z.intersection(z.object({ serverId: z.string() }), destinationInputSchema), output: destinationSchema,
 });
 export const beginRpc = defineRpc({
   name: 'transfer.receive-begin',
-  input: z.object({ id: idSchema, parent: z.string(), name: z.string(), bytes: z.number().int().positive().max(MAX_BYTES), digest: digestSchema }),
+  input: z.intersection(z.object({ id: idSchema, bytes: z.number().int().positive().max(MAX_BYTES), digest: digestSchema }), destinationInputSchema),
   output: z.object({ token: idSchema }),
 });
 export const chunkRpc = defineRpc({
@@ -92,7 +107,7 @@ export const verifyRpc = defineRpc({
 });
 export const startRpc = defineRpc({
   name: 'transfer.start',
-  input: z.object({ previewId: idSchema, serverId: z.string(), parent: z.string(), name: z.string() }),
+  input: z.intersection(z.object({ previewId: idSchema, serverId: z.string() }), destinationInputSchema),
   output: jobSchema,
 });
 export const statusRpc = defineRpc({ name: 'transfer.status', input: z.object({ id: idSchema }), output: jobSchema });
