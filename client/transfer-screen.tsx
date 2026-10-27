@@ -1,5 +1,5 @@
 import type { PluginScreenProps } from '@getpaseo/plugin/client';
-import { usePaseo, useRpc, useWorkspace } from '@getpaseo/plugin/client';
+import { usePaseo, useRpc } from '@getpaseo/plugin/client';
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import {
@@ -22,10 +22,6 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
   const start = useRpc(startRpc);
   const status = useRpc(statusRpc);
   const archive = useRpc(archiveSourceRpc);
-  const currentWorkspace = useWorkspace(params.workspaceId || '', workspace => ({
-    id: workspace.id, title: workspace.title || workspace.name, directory: workspace.directory,
-    projectKind: workspace.projectKind, archivingAt: workspace.archivingAt,
-  }));
   const contextual = !!params.workspaceId;
   const [sources, setSources] = useState<{ id: string; title: string; directory: string }[]>([]);
   const [hosts, setHosts] = useState<{ serverId: string; label: string }[]>([]);
@@ -42,10 +38,7 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
   const [confirmed, setConfirmed] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
-  const visibleSources = contextual
-    ? currentWorkspace?.projectKind === 'git' && !currentWorkspace.archivingAt ? [currentWorkspace] : []
-    : sources;
-  const sourceAvailable = visibleSources.some(source => source.id === workspaceId);
+  const sourceAvailable = sources.some(source => source.id === workspaceId);
   const running = job?.phase === 'sending' || job?.phase === 'restoring';
   const locked = busy || !!running;
   const colors = theme.colors;
@@ -78,7 +71,14 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
       if (cancelled) return;
       setHosts(available);
       if (available.length === 1) setServerId(available[0]!.serverId);
-      if (contextual) return;
+      if (params.workspaceId) {
+        const workspace = await paseo.workspaces.ref(params.workspaceId).refresh();
+        if (cancelled) return;
+        setSources(workspace && workspace.projectKind === 'git' && !workspace.archivingAt
+          ? [{ id: workspace.id, title: workspace.title || workspace.name, directory: workspace.workspaceDirectory ?? workspace.projectRootPath }]
+          : []);
+        return;
+      }
       const first = await paseo.workspaces.list({ page: { limit: 100 } });
       const workspaces = [...first.entries];
       let cursor = first.pageInfo.nextCursor;
@@ -91,7 +91,7 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
     }
     void load().catch(failure => { if (!cancelled) setError(message(failure)); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [paseo, targets, contextual]);
+  }, [paseo, targets, params.workspaceId]);
   useEffect(() => {
     if (!job || !running) return;
     let cancelled = false;
@@ -120,8 +120,8 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
       <View style={styles.card}>
         <Text style={styles.heading}>1. Source workspace</Text>
         {loading && <Text style={styles.muted}>Loading…</Text>}
-        {!loading && !visibleSources.length && <Text style={styles.muted}>{contextual ? 'The current workspace is unavailable for transfer.' : 'No Git workspaces are available on this host.'}</Text>}
-        {visibleSources.map(source => contextual
+        {!loading && !sources.length && <Text style={styles.muted}>{contextual ? 'The current workspace is unavailable for transfer.' : 'No Git workspaces are available on this host.'}</Text>}
+        {sources.map(source => contextual
           ? <View key={source.id} style={{ padding: 12, gap: 3, borderWidth: 1, borderColor: colors.border, borderRadius: 8 }}>
               <Text style={styles.text}>{source.title}</Text><Text selectable style={styles.muted}>{source.directory}</Text>
             </View>
