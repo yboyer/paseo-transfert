@@ -137,6 +137,26 @@ test('installed plugin copies between two Paseo daemons and safely archives a ma
   assert.equal(await readFile(path.join(destinationRepository, 'code.txt'), 'utf8'), 'MBP work stays untouched\n');
   await assert.rejects(access(path.join(projectJob.receipt.directory, 'setup-must-not-run')), /ENOENT/);
 
+  // App-mediated transport: use independent connections rather than the daemon route.
+  const { createFederation } = await import('../client/federation');
+  const { createTransferClient } = await import('../client/connected-transfer');
+  const registry = createFederation();
+  const sourceId = (await call(rpc.identityRpc, {})).serverId;
+  for (const [id, client] of [[sourceId, sourceClient], [serverId, destinationClient]] as const) {
+    registry.register(id, async (contract, input) => contract.output.parse(await client.invokePluginRpc(rpc.PLUGIN_ID, contract.name, contract.input.parse(input))));
+  }
+  const app = createTransferClient(registry.rpc);
+  const appPreview = await call(rpc.previewRpc, { workspaceId: source.id });
+  const appStart = await app.start(sourceId, serverId, appPreview.id, { projectId: existingProject.id, name: 'app-project-transfer' });
+  for (let attempt = 0; attempt < 160 && ['sending', 'restoring'].includes(app.status(appStart.id).phase); attempt++) await pause(250);
+  const appJob = app.status(appStart.id);
+  assert.equal(appJob.phase, 'complete', appJob.error || 'app-mediated transfer finishes');
+  const appWorkspace = await destinationApi.workspaces.ref(appJob.receipt!.workspaceId).refresh();
+  assert.equal(appWorkspace?.projectId, existingProject.id);
+  assert.equal(await readFile(path.join(appJob.receipt!.directory, 'code.txt'), 'utf8'), 'unstaged\n');
+  assert.equal(await gitText(appJob.receipt!.directory, ['show', ':code.txt']), 'staged');
+  assert.equal(await readFile(path.join(destinationRepository, 'code.txt'), 'utf8'), 'MBP work stays untouched\n');
+
   await writeFile(path.join(job.receipt.directory, 'code.txt'), 'changed on destination');
   await assert.rejects(call(rpc.archiveSourceRpc, { id: job.id, confirm: true }), /destination changed/);
   await access(sourceDirectory);

@@ -114,3 +114,20 @@ export const statusRpc = defineRpc({ name: 'transfer.status', input: z.object({ 
 export const archiveSourceRpc = defineRpc({
   name: 'transfer.archive-source', input: z.object({ id: idSchema, confirm: z.literal(true) }), output: jobSchema,
 });
+
+// App-mediated transfers use each installation's own authenticated RPC capability.
+export const identityRpc = defineRpc({ name: 'transfer.identity', input: z.object({}), output: z.object({ serverId: z.string(), protocol: z.literal(1) }) });
+export const exportStartRpc = defineRpc({
+  name: 'transfer.export-start', input: z.object({ previewId: idSchema, serverId: z.string() }),
+  output: z.object({ job: jobSchema, digest: digestSchema, transferId: idSchema }),
+});
+export const exportChunkRpc = defineRpc({
+  name: 'transfer.export-chunk', input: z.object({ id: idSchema, offset: z.number().int().nonnegative() }),
+  output: z.object({ data: z.string().max(CHUNK_BYTES * 2) }),
+});
+export const exportSettleRpc = defineRpc({
+  name: 'transfer.export-settle', input: z.object({ id: idSchema, receipt: receiptSchema.optional(), error: z.string().optional() }), output: jobSchema,
+});
+export const exportArchiveRpc = defineRpc({
+  name: 'transfer.export-archive', input: z.object({ id: idSchema, receipt: receiptSchema, confirm: z.literal(true) }), output: jobSchema,
+});

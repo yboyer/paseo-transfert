@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import type { PluginHandlerContext } from '@getpaseo/plugin/server';
 import {
   MAX_BYTES, CHUNK_BYTES, beginRpc, chunkRpc, finishRpc, verifyRpc,
-  type Job, type Preview, type Snapshot, type DestinationInput,
+  type Job, type Preview, type Snapshot, type DestinationInput, type Receipt,
 } from '../shared/transfer';
 import { git } from './git';
 import { capture, fingerprint, sha256 } from './snapshot';
@@ -13,7 +13,7 @@ import { connectDestination } from './connection';
 
 type Paseo = PluginHandlerContext['paseo'];
 type Prepared = { preview: Preview; snapshot: Snapshot; data: Buffer; consumed: boolean };
-type Running = { job: Job; prepared: Prepared; serverId: string; token?: string; archiving: boolean };
+type Running = { job: Job; prepared: Prepared; serverId: string; token?: string; archiving: boolean; app?: boolean };
 
 export async function assertIdle(paseo: Paseo, workspaceId: string, directory: string, archive = false) {
   let cursor: string | undefined;
@@ -81,6 +81,57 @@ export class TransferService {
       void this.send(running, input).finally(() => this.locks.delete(workspaceId));
       return { ...job };
     } catch (error) { this.locks.delete(workspaceId); throw error; }
+  }
+  async exportStart(paseo: Paseo, input: { previewId: string; serverId: string }) {
+    const prepared = this.prepared.get(input.previewId);
+    if (!prepared || Date.parse(prepared.preview.expiresAt) < Date.now() || prepared.consumed) throw new Error('Preview expired or already used. Create a new preview.');
+    const workspaceId = prepared.preview.workspaceId;
+    if (this.locks.has(workspaceId)) throw new Error('A transfer is already in progress for this workspace.');
+    this.locks.add(workspaceId);
+    try {
+      await this.assertSource(paseo, prepared);
+      const job: Job = { id: randomUUID(), destinationServerId: input.serverId, phase: 'sending', sent: 0, total: prepared.data.length, error: null, receipt: null, sourceArchived: false };
+      const digest = sha256(prepared.data);
+      prepared.consumed = true;
+      this.prepared.delete(input.previewId);
+      this.jobs.set(job.id, { job, prepared, serverId: input.serverId, archiving: false, app: true });
+      return { job: { ...job }, digest, transferId: prepared.preview.id };
+    } catch (error) { this.locks.delete(workspaceId); throw error; }
+  }
+  exportChunk(id: string, offset: number) {
+    const running = this.getJob(id);
+    if (!running.app || running.job.phase !== 'sending' || offset >= running.prepared.data.length) throw new Error('Transfer data is unavailable. Create a new preview.');
+    const chunk = running.prepared.data.subarray(offset, offset + CHUNK_BYTES);
+    running.job.sent = offset + chunk.length;
+    return { data: chunk.toString('base64') };
+  }
+  exportSettle(id: string, receipt?: Receipt, error?: string) {
+    const running = this.getJob(id);
+    if (!running.app || running.job.phase !== 'sending') throw new Error('Transfer is no longer sending.');
+    if (receipt && (receipt.transferId !== running.prepared.preview.id || receipt.digest !== sha256(running.prepared.data))) throw new Error('Destination receipt mismatch.');
+    if (!receipt && !error) throw new Error('A receipt or an error is required.');
+    running.job.phase = receipt ? 'complete' : 'failed';
+    running.job.receipt = receipt ?? null;
+    running.job.error = receipt ? null : error!;
+    running.prepared.data = Buffer.alloc(0);
+    this.locks.delete(running.prepared.preview.workspaceId);
+    return this.status(id);
+  }
+  async exportArchive(paseo: Paseo, id: string, receipt: Receipt) {
+    const running = this.getJob(id);
+    if (!running.app || running.job.phase !== 'complete' || !running.job.receipt || JSON.stringify(receipt) !== JSON.stringify(running.job.receipt)) throw new Error('Destination receipt mismatch.');
+    if (running.job.sourceArchived) return this.status(id);
+    const workspaceId = running.prepared.preview.workspaceId;
+    if (running.archiving || this.locks.has(workspaceId)) throw new Error('Another operation is in progress.');
+    this.locks.add(workspaceId); running.archiving = true;
+    try {
+      await this.assertSource(paseo, running.prepared, true);
+      if (running.prepared.snapshot.ignored.length) throw new Error('Ignored files exist. Copy is allowed, but moving is blocked to avoid data loss.');
+      const result = await paseo.workspaces.ref(workspaceId).archive();
+      if (result.error || !result.archivedAt) throw new Error(result.error || 'Paseo did not confirm source archiving.');
+      running.job.sourceArchived = true;
+      return this.status(id);
+    } finally { running.archiving = false; this.locks.delete(workspaceId); }
   }
   status(id: string) { return { ...this.getJob(id).job }; }
   async archive(paseo: Paseo, id: string) {
@@ -154,6 +205,7 @@ export class TransferService {
   private sweep() {
     const now = Date.now();
     for (const [id, prepared] of this.prepared) if (!prepared.consumed && Date.parse(prepared.preview.expiresAt) < now) this.prepared.delete(id);
+    for (const running of this.jobs.values()) if (running.app && running.job.phase === 'sending' && Date.parse(running.prepared.preview.expiresAt) < now) this.exportSettle(running.job.id, undefined, 'Transfer expired. Keep Paseo open during transfers.');
     for (const [id, running] of this.jobs) if (!running.archiving && ['complete', 'failed'].includes(running.job.phase) && Date.parse(running.prepared.preview.expiresAt) + 45 * 60_000 < now) {
       this.jobs.delete(id); this.prepared.delete(running.prepared.preview.id);
     }

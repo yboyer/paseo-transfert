@@ -8,4 +8,4 @@ Copy or move Git workspaces between two Paseo hosts.
 - Preserve staged and unstaged changes without modifying existing destination workspaces.
 - Confirm source archiving after a verified copy.
 
-Install the plugin on both hosts. Paseo 0.13.x, Node.js 22, and Git are required. Conversations and Git-ignored files are excluded. Copies remain independent.
+Install or update the plugin on both hosts and connect them in the Paseo app. Keep the app open until the transfer finishes. No daemon-to-daemon pairing is needed. Paseo 0.13.x, Node.js 22, and Git are required. Conversations and Git-ignored files are excluded. Copies remain independent.

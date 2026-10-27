@@ -15,6 +15,11 @@ export default function contribute(server: PluginServerContext) {
     return directory.hosts.filter(host => host.enabled && host.status === 'online' && host.serverId && host.serverId !== directory.self.serverId)
       .map(host => ({ serverId: host.serverId!, label: host.label || host.serverId! }));
   });
+  server.handle(rpc.identityRpc, async (_, { paseo }) => ({ serverId: (await paseo.hosts.list()).self.serverId, protocol: 1 as const }));
+  server.handle(rpc.exportStartRpc, (input, { paseo }) => service.exportStart(paseo, input));
+  server.handle(rpc.exportChunkRpc, ({ id, offset }) => service.exportChunk(id, offset));
+  server.handle(rpc.exportSettleRpc, ({ id, receipt, error }) => service.exportSettle(id, receipt, error));
+  server.handle(rpc.exportArchiveRpc, ({ id, receipt }, { paseo }) => service.exportArchive(paseo, id, receipt));
   server.handle(rpc.previewRpc, ({ workspaceId }, { paseo }) => service.preview(paseo, workspaceId));
   server.handle(rpc.projectsRpc, (_, { paseo }) => listProjects(paseo));
   server.handle(rpc.destinationProjectsRpc, async ({ serverId }) => {

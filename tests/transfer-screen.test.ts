@@ -28,9 +28,9 @@ test('transfer screen renders outside a workspace panel and stays scoped when th
       list: async () => { listCalls++; return { entries: workspaces, pageInfo: {} }; },
     } },
     rpc: {
-      'transfer.targets': async () => [{ serverId: 'mbp', label: 'MBP' }],
-      'transfer.destination-projects': async () => [{ id: 'project-one', name: 'MBP Project', directory: '/Users/you/Code/project' }],
-      'transfer.inspect-destination': async input => {
+      'transfer.identity': async () => ({ serverId: 'hosted', protocol: 1 }),
+      'transfer.projects': async () => [{ id: 'project-one', name: 'MBP Project', directory: '/Users/you/Code/project' }],
+      'transfer.destination': async input => {
         inspected.push(input);
         return { root: '/Users/you/Code/.paseo-transfers/copy', repository: '/Users/you/Code/project', worktreeParent: '/Users/you/Code/.paseo-transfers/copy/worktree', projectId: input.projectId, projectName: 'MBP Project' };
       },
@@ -49,11 +49,19 @@ test('transfer screen renders outside a workspace panel and stays scoped when th
     external: ['react', 'react/jsx-runtime'],
     plugins: [{ name: 'screen-host', setup(builder) {
       builder.onResolve({ filter: /^@getpaseo\/plugin\/client$/ }, () => ({ path: 'paseo', namespace: 'test-host' }));
+      builder.onResolve({ filter: /[\/]federation$/ }, () => ({ path: 'federation', namespace: 'test-host' }));
+      builder.onResolve({ filter: /[\/]connected-transfer$/ }, () => ({ path: 'connected', namespace: 'test-host' }));
       builder.onResolve({ filter: /^react-native$/ }, () => ({ path: 'native', namespace: 'test-host' }));
-      builder.onLoad({ filter: /.*/, namespace: 'test-host' }, ({ path: module }) => ({ resolveDir: process.cwd(), contents: module === 'native'
+      builder.onLoad({ filter: /.*/, namespace: 'test-host' }, ({ path: module }) => ({ resolveDir: process.cwd(), contents: module === 'federation'
+        ? `export const federation={subscribe:()=>()=>{},snapshot:()=>1,has:()=>true,rpc:()=> (contract,input)=>globalThis.transfertScreenTest.rpc[contract.name](input)};`
+        : module === 'connected'
+        ? `export const connectedTransfer={has:()=>false,start:async(source,serverId,previewId,target)=>globalThis.transfertScreenTest.rpc['transfer.start']({serverId,previewId,...target})};`
+        : module === 'native'
         ? "export const Pressable='Pressable', ScrollView='ScrollView', Text='Text', TextInput='TextInput', View='View';"
         // Keep the real state hook: this test must fail if the screen calls it without a panel provider.
         : `export { useWorkspace } from ${JSON.stringify(stateModule)};
+           const hosts=[{serverId:'hosted',label:'hosted',status:'online'},{serverId:'mbp',label:'MBP',status:'online'}];
+           export function useHosts(){return hosts;}
            export function usePaseo() { return globalThis.transfertScreenTest.api; }
            const unused = async () => { throw new Error('Unexpected RPC'); };
            export function useRpc(contract) { return globalThis.transfertScreenTest.rpc[contract.name] || unused; }`,
@@ -75,6 +83,8 @@ test('transfer screen renders outside a workspace panel and stays scoped when th
   assert.doesNotMatch(JSON.stringify(screen.toJSON()), /Workspace Two/);
   assert.deepEqual(refreshed, ['one']);
   assert.equal(listCalls, 0);
+  assert.match(JSON.stringify(screen.toJSON()), /Select a destination host to continue/);
+  await act(async () => { screen.root.findByProps({ accessibilityLabel: 'MBP' }).props.onPress(); });
   assert.match(JSON.stringify(screen.toJSON()), /MBP Project/);
   assert.match(JSON.stringify(screen.toJSON()), /Users\/you\/Code\/project/);
   assert.equal(screen.root.findByProps({ accessibilityLabel: 'Show preview' }).props.disabled, true);
@@ -83,7 +93,7 @@ test('transfer screen renders outside a workspace panel and stays scoped when th
   await act(async () => { screen.root.findByProps({ accessibilityLabel: 'Show preview' }).props.onPress(); });
   assert.equal(inspected.length, 1);
   assert.equal(inspected[0]!.projectId, 'project-one');
-  assert.equal(inspected[0]!.serverId, 'mbp');
+  assert.equal('serverId' in inspected[0]!, false);
   assert.equal('parent' in inspected[0]!, false);
   assert.match(JSON.stringify(screen.toJSON()), /feature\/A/);
   await act(async () => { screen.root.findByProps({ accessibilityLabel: 'Confirm copy' }).props.onPress(); });

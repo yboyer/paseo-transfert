@@ -19,7 +19,7 @@ Run on each host:
 paseo plugin add git:yboyer/paseo-transfert
 ```
 
-The plugin uses connections registered **on the source daemon**. A connection visible only in your app is not enough. Connect the destination host to the source daemon through the Paseo settings or the `paseo host add` command. The plugin does not require additional SSH configuration.
+Connect both hosts in the Paseo app. Each installation registers its authenticated plugin RPC connection in a shared app registry. The app relays archive chunks from the source to the destination. No daemon-to-daemon pairing or SSH setup is needed. Both hosts must run this updated version of Transfer.
 
 Transport dependencies are installed with `npm ci --omit=dev --ignore-scripts`. Paseo needs access to the npm registry during installation.
 
@@ -101,9 +101,9 @@ First version limits:
 - The new worktree uses a unique `transfert/<source-branch>-<id>` branch. Existing project references are never replaced.
 - The transfer does not run Git hooks or project setup scripts.
 
-A preview expires after 15 minutes. Source changes require a new preview. The transfer continues if you leave the screen, as long as both daemons and the plugin remain running.
+A preview expires after 15 minutes. Source changes require a new preview. You can leave the screen, but keep Paseo open and both hosts connected until the transfer finishes. Closing or reloading the app interrupts the relay. Check the destination before retrying; an interrupted transfer can leave a partial folder.
 
-The tracking ID lets you retrieve an operation on the same source host for about an hour. Tracking and source archiving confirmation do not survive a plugin restart. Completed copies remain on disk.
+The tracking ID lets you retrieve an operation on the same source host for about an hour. Live progress and destination verification for source archiving are kept in the app. Reloading the app loses that state. Source-side status remains available until plugin restart or expiry, but does not resume the relay. An abandoned export expires after 15 minutes. Completed copies remain on disk.
 
 If a transfer fails, the source stays intact. A partial folder may remain at the destination. Review its contents before removing it. Use a new folder for another attempt. The transfer does not automatically resume previously received chunks.
 
@@ -121,8 +121,8 @@ npm install --global @getpaseo/cli@0.13.0
 npm run test:e2e
 ```
 
-This test installs the plugin, connects the daemons, copies a real worktree, checks the received workspace, checks project selection and unchanged destination branches, tests archive refusals, and then archives a source worktree managed by Paseo.
+This test installs the plugin, checks both daemon routing and the app relay, copies a real worktree, checks the received workspace, checks project selection and unchanged destination branches, tests archive refusals, and then archives a source worktree managed by Paseo.
 
-The Paseo Node transport is isolated in `server/connection.ts`. It uses the local daemon identity and its authenticated routes. The SDK does not expose a public method for cross-host plugin RPCs. The plugin therefore uses its low-level client, pinned to version 0.13.0. Paseo support is limited to 0.13.x until later versions are verified.
+The app transport lives in `client/federation.ts` and `client/connected-transfer.ts`. Each installation contributes its own `client.rpc` capability. The shared registry resolves the current installation on each call and removes it on unload. Existing daemon-routed RPCs remain compatible through the version-pinned Node transport in `server/connection.ts`. Paseo support remains limited to 0.13.x until later versions are verified.
 
 Automated tests cover the server and transfers between daemons. A render test covers the screen outside a workspace panel, project card selection, and scoped transfer requests. Visual checks in the Paseo desktop and mobile clients remain manual.

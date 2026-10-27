@@ -1,5 +1,6 @@
 import type { PluginClientContext, PluginSidebarItemProps, PluginButtonRegistration } from '@getpaseo/plugin/client';
 import { SidebarRow } from '@getpaseo/plugin/client/ui';
+import { registerHost } from './client/federation';
 import { TransferScreen } from './client/transfer-screen';
 
 function TransferItem({ currentScreen, openScreen }: PluginSidebarItemProps) {
@@ -7,6 +8,7 @@ function TransferItem({ currentScreen, openScreen }: PluginSidebarItemProps) {
 }
 export default function contribute(client: PluginClientContext) {
   const cleanups = [
+    registerHost(client),
     client.addScreen({ id: 'transfer', title: 'Transfer', Component: TransferScreen }),
     client.addSidebarHeaderItem({ id: 'transfer', title: 'Transfer', Component: TransferItem }),
     client.addCommandCenterItem({ id: 'transfer-workspace', title: 'Transfer this workspace', icon: 'ArrowRightLeft', context: 'workspace',

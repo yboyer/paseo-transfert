@@ -261,3 +261,97 @@ test('project destinations refuse unknown projects, occupied names and symbolic-
   await symlink(source, path.join(root, '.paseo-transfers'));
   await assert.rejects(projectDestination(project, 'other'), /Unsafe parent/);
 });
+
+test('app connections copy into an existing project and recheck both hosts before archiving', async t => {
+  const { root, source } = await fixture(t);
+  const rpc = await import('../shared/transfer');
+  const { createTransferClient } = await import('../client/connected-transfer');
+  const { createFederation } = await import('../client/federation');
+  const projectDirectory = path.join(root, 'target-project');
+  await git(root, ['-c', 'protocol.file.allow=always', 'clone', source, projectDirectory]);
+  await writeFile(path.join(source, 'tracked.txt'), 'staged\n');
+  await git(source, ['add', 'tracked.txt']);
+  await writeFile(path.join(source, 'tracked.txt'), 'unstaged\n');
+  // Force multiple RPC chunks.
+  await writeFile(path.join(source, 'large.bin'), Buffer.alloc(CHUNK_BYTES * 2, 42));
+  let archived = false;
+  const paseo = {
+    workspaces: { ref: () => ({ refresh: async () => ({ id: 'source', name: 'source', projectRootPath: source }), archive: async () => { archived = true; return { archivedAt: new Date().toISOString() }; } }) },
+    agents: { list: async () => ({ entries: [], pageInfo: {} }) },
+    terminals: { list: async () => ({ entries: [] }) },
+  } as unknown as Parameters<TransferService['preview']>[0];
+  const service = new TransferService();
+  const receiver = new Receiver();
+  t.after(async () => { receiver.dispose(); await service.dispose(); });
+  const registry = createFederation();
+  const project = { id: 'target-project', name: 'Target project', directory: projectDirectory };
+  const offsets: number[] = [];
+  registry.register('source', async (contract, input) => {
+    let result: unknown;
+    if (contract.name === rpc.exportStartRpc.name) result = await service.exportStart(paseo, rpc.exportStartRpc.input.parse(input));
+    else if (contract.name === rpc.exportChunkRpc.name) { const value = rpc.exportChunkRpc.input.parse(input); offsets.push(value.offset); result = service.exportChunk(value.id, value.offset); }
+    else if (contract.name === rpc.exportSettleRpc.name) { const value = rpc.exportSettleRpc.input.parse(input); result = service.exportSettle(value.id, value.receipt, value.error); }
+    else if (contract.name === rpc.exportArchiveRpc.name) { const value = rpc.exportArchiveRpc.input.parse(input); result = await service.exportArchive(paseo, value.id, value.receipt); }
+    else throw new Error(`Unexpected source RPC: ${contract.name}`);
+    return contract.output.parse(result);
+  });
+  let failChunk = true;
+  registry.register('target', async (contract, input) => {
+    let result: unknown;
+    if (contract.name === rpc.beginRpc.name) result = await receiver.begin(rpc.beginRpc.input.parse(input), project);
+    else if (contract.name === rpc.chunkRpc.name) {
+      if (failChunk) throw new Error('Target disconnected during upload.');
+      result = receiver.chunk(rpc.chunkRpc.input.parse(input));
+    }
+    else if (contract.name === rpc.finishRpc.name) result = await receiver.finish(rpc.finishRpc.input.parse(input).token, async () => 'received');
+    else if (contract.name === rpc.verifyRpc.name) result = await receiver.verify(rpc.verifyRpc.input.parse(input).token);
+    else throw new Error(`Unexpected target RPC: ${contract.name}`);
+    return contract.output.parse(result);
+  });
+  const client = createTransferClient(registry.rpc);
+  const failedPreview = await service.preview(paseo, 'source');
+  const failed = await client.start('source', 'target', failedPreview.id, { projectId: project.id, name: 'failed-app-copy' });
+  for (let attempts = 0; attempts < 500 && client.status(failed.id).phase === 'sending'; attempts++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(client.status(failed.id).phase, 'failed');
+  assert.match(service.status(failed.id).error!, /Target disconnected/);
+  assert.throws(() => service.exportChunk(failed.id, 0), /unavailable/);
+  await assert.rejects(client.archive(failed.id), /Finish and verify/);
+  assert.equal(archived, false);
+  failChunk = false;
+  offsets.length = 0;
+  const preview = await service.preview(paseo, 'source');
+  const job = await client.start('source', 'target', preview.id, { projectId: project.id, name: 'app-copy' });
+  for (let attempts = 0; attempts < 500 && ['sending', 'restoring'].includes(client.status(job.id).phase); attempts++) await new Promise(resolve => setTimeout(resolve, 10));
+  const result = client.status(job.id);
+  assert.equal(result.error, null);
+  assert.equal(result.phase, 'complete');
+  assert.ok(offsets.length > 1);
+  assert.equal(result.receipt!.projectId, project.id);
+  assert.equal(contentDigest(await capture(result.receipt!.directory)), contentDigest(await capture(source)));
+  assert.equal(await gitText(projectDirectory, ['status', '--porcelain']), '');
+  const targetFile = path.join(result.receipt!.directory, 'tracked.txt');
+  await writeFile(targetFile, 'target changed');
+  await assert.rejects(client.archive(job.id));
+  assert.equal(archived, false);
+  await writeFile(targetFile, 'unstaged\n');
+  await writeFile(path.join(source, 'tracked.txt'), 'source changed');
+  await assert.rejects(client.archive(job.id), /source changed/i);
+  assert.equal(archived, false);
+  await writeFile(path.join(source, 'tracked.txt'), 'unstaged\n');
+  assert.equal((await client.archive(job.id)).sourceArchived, true);
+  assert.equal(archived, true);
+});
+
+test('federation releases only its own installation and resolves new capabilities per request', async () => {
+  const { createFederation } = await import('../client/federation');
+  const { identityRpc } = await import('../shared/transfer');
+  const registry = createFederation();
+  const call = registry.rpc('host');
+  const releaseOld = registry.register('host', async contract => contract.output.parse({ serverId: 'old', protocol: 1 }));
+  assert.equal((await call(identityRpc, {})).serverId, 'old');
+  const releaseNew = registry.register('host', async contract => contract.output.parse({ serverId: 'new', protocol: 1 }));
+  releaseOld();
+  assert.equal((await call(identityRpc, {})).serverId, 'new');
+  releaseNew();
+  assert.throws(() => call(identityRpc, {}), /unavailable/);
+});

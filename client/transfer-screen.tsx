@@ -1,11 +1,13 @@
 import type { PluginScreenProps } from '@getpaseo/plugin/client';
-import { usePaseo, useRpc } from '@getpaseo/plugin/client';
-import { useEffect, useState } from 'react';
+import { useHosts, usePaseo, useRpc } from '@getpaseo/plugin/client';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import {
-  targetsRpc, previewRpc, inspectDestinationRpc, startRpc, statusRpc, archiveSourceRpc, destinationProjectsRpc,
+  previewRpc, destinationRpc, statusRpc, projectsRpc, identityRpc,
   type Preview, type Job, type Project, type DestinationInput,
 } from '../shared/transfer';
+import { federation } from './federation';
+import { connectedTransfer } from './connected-transfer';
 
 function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
 function formatBytes(bytes: number) { return `${(bytes / 1024 / 1024).toFixed(1)} MiB`; }
@@ -16,18 +18,18 @@ export function TransferScreen(props: PluginScreenProps) {
 
 function TransferForm({ theme, layout, params, host, navigation }: PluginScreenProps) {
   const paseo = usePaseo();
-  const targets = useRpc(targetsRpc);
-  const loadProjects = useRpc(destinationProjectsRpc);
+  const appHosts = useHosts();
+  const federationRevision = useSyncExternalStore(federation.subscribe, federation.snapshot, federation.snapshot);
+  const identify = useRpc(identityRpc);
+  const [sourceId, setSourceId] = useState(host.id);
   const prepare = useRpc(previewRpc);
-  const inspect = useRpc(inspectDestinationRpc);
-  const start = useRpc(startRpc);
   const status = useRpc(statusRpc);
-  const archive = useRpc(archiveSourceRpc);
   const contextual = !!params.workspaceId;
   const [sources, setSources] = useState<{ id: string; title: string; directory: string }[]>([]);
-  const [hosts, setHosts] = useState<{ serverId: string; label: string }[]>([]);
+  const hosts = appHosts.filter(target => target.serverId !== sourceId);
   const [workspaceId, setWorkspaceId] = useState(params.workspaceId || '');
   const [serverId, setServerId] = useState('');
+  const targetOnline = appHosts.some(target => target.serverId === serverId && target.status === 'online') && federation.has(serverId);
   const [useExistingProject, setUseExistingProject] = useState(true);
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectId, setProjectId] = useState('');
@@ -46,7 +48,7 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
   const [loading, setLoading] = useState(true);
   const sourceAvailable = sources.some(source => source.id === workspaceId);
   const target: DestinationInput = useExistingProject ? { projectId, name } : { parent, name };
-  const destinationReady = !!serverId && !!name && (useExistingProject ? !!projectId && !projectsLoading && !projectError : !!parent);
+  const destinationReady = targetOnline && !!serverId && !!name && (useExistingProject ? !!projectId && !projectsLoading && !projectError : !!parent);
   const running = job?.phase === 'sending' || job?.phase === 'restoring';
   const locked = busy || !!running;
   const colors = theme.colors;
@@ -75,10 +77,9 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const available = await targets({});
+      const identity = await identify({});
       if (cancelled) return;
-      setHosts(available);
-      if (available.length === 1) setServerId(available[0]!.serverId);
+      setSourceId(identity.serverId);
       if (params.workspaceId) {
         const workspace = await paseo.workspaces.ref(params.workspaceId).refresh();
         if (cancelled) return;
@@ -99,25 +100,25 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
     }
     void load().catch(failure => { if (!cancelled) setError(message(failure)); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [paseo, targets, params.workspaceId]);
+  }, [paseo, identify, params.workspaceId]);
   useEffect(() => {
     let cancelled = false;
     setProjects([]); setProjectId(''); setProjectError(''); setPreview(null); setDestination(null);
-    if (!serverId) { setProjectsLoading(false); return; }
+    if (!serverId || !targetOnline) { setProjectsLoading(false); return; }
     setProjectsLoading(true);
-    void loadProjects({ serverId }).then(available => {
+    void federation.rpc(serverId)(projectsRpc, {}).then(available => {
       if (!cancelled) setProjects(available);
     }).catch(failure => { if (!cancelled) setProjectError(message(failure)); })
       .finally(() => { if (!cancelled) setProjectsLoading(false); });
     return () => { cancelled = true; };
-  }, [serverId, loadProjects]);
+  }, [serverId, targetOnline, federationRevision]);
   useEffect(() => {
     if (!job || !running) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
       try {
-        const next = await status({ id: job!.id });
+        const next = connectedTransfer.has(job!.id) ? connectedTransfer.status(job!.id) : await status({ id: job!.id });
         if (cancelled) return;
         setJob(next); setError('');
         if (next.phase === 'sending' || next.phase === 'restoring') timer = setTimeout(() => void poll(), 1000);
@@ -152,9 +153,9 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
       </View>
       <View style={styles.card}>
         <Text style={styles.heading}>2. Destination</Text>
-        <View style={styles.row}>{hosts.map(target => <Button key={target.serverId} label={target.label} selected={serverId === target.serverId} disabled={locked}
+        <View style={styles.row}>{hosts.map(target => <Button key={target.serverId} label={`${target.label}${target.status !== 'online' ? ' (offline)' : !federation.has(target.serverId) ? ' (Transfer unavailable)' : ''}`} selected={serverId === target.serverId} disabled={locked || target.status !== 'online' || !federation.has(target.serverId)}
           onPress={() => { setServerId(target.serverId); setParent(''); invalidate(); }} />)}</View>
-        {!loading && !hosts.length && <Text style={styles.muted}>Connect another host to the source daemon in Paseo. Install Transfer on both hosts.</Text>}
+        {!loading && !hosts.length && <Text style={styles.muted}>Connect another host in the Paseo app. Install or update Transfer on both hosts.</Text>}
         <View style={styles.row}>
           <Button label="Existing project" selected={useExistingProject} disabled={locked} onPress={() => { setUseExistingProject(true); invalidate(); }} />
           <Button label="Separate copy" selected={!useExistingProject} disabled={locked} onPress={() => { setUseExistingProject(false); invalidate(); }} />
@@ -180,9 +181,10 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
         <Text style={styles.heading}>3. Action</Text>
         <View style={styles.row}><Button label="Copy" selected={!move} disabled={locked} onPress={() => setMove(false)} /><Button label="Move" selected={move} disabled={locked} onPress={() => setMove(true)} /></View>
         <Text style={styles.muted}>{move ? 'The plugin copies and verifies the files. You will then confirm source archiving.' : 'The source remains available. The two copies are independent.'}</Text>
+        {!destinationReady && <Text style={styles.muted}>{!serverId ? 'Select a destination host to continue.' : !targetOnline ? 'Connect the destination and update Transfer on both hosts to continue.' : useExistingProject && !projectId ? 'Select a destination project to continue.' : 'Complete the destination fields to continue.'}</Text>}
         <Button label={busy ? 'Preparing…' : 'Show preview'} disabled={locked || !sourceAvailable || !destinationReady} onPress={() => void perform(async () => {
           invalidate();
-          const inspected = await inspect({ serverId, ...target });
+          const inspected = await federation.rpc(serverId)(destinationRpc, target);
           const result = await prepare({ workspaceId });
           setDestination(inspected); setPreview(result);
         })} />
@@ -204,7 +206,7 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
         <ScrollView style={{ maxHeight: 180 }}>{preview.files.map(file => <Text key={file} selectable style={styles.muted}>{file}</Text>)}</ScrollView>
         <Text style={styles.muted}>The preview expires after 15 minutes. Existing folders will not be overwritten.</Text>
         <Button label={move ? 'Copy before moving' : 'Confirm copy'} selected disabled={locked || (move && preview.ignored.length > 0)} onPress={() => void perform(async () => {
-          const created = await start({ previewId: preview.id, serverId, ...target });
+          const created = await connectedTransfer.start(sourceId, serverId, preview.id, target);
           setJob(created); setJobId(created.id);
         })} />
       </View>}
@@ -213,7 +215,7 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
       <Text style={styles.heading}>{job.sourceArchived ? 'Move complete' : job.phase === 'complete' ? 'Copy verified' : job.phase === 'failed' ? 'Transfer interrupted' : job.phase === 'restoring' ? 'Restoring and verifying…' : 'Transferring…'}</Text>
       <Text style={styles.text}>{formatBytes(job.sent)} / {formatBytes(job.total)}</Text>
       <Text selectable style={styles.muted}>Tracking ID: {job.id}</Text>
-      <Text style={styles.muted}>The transfer continues if you leave this screen. Both daemons must remain running.</Text>
+      <Text style={styles.muted}>You can leave this screen. Keep Paseo open and both hosts connected until the transfer finishes.</Text>
       {!!job.error && <Text selectable style={{ ...styles.text, color: colors.statusDanger }}>{job.error}</Text>}
       {job.phase === 'failed' && <Text style={styles.muted}>The source is preserved. A partial folder may remain at the destination. Use a new folder to retry.</Text>}
       {job.receipt && <>
@@ -224,9 +226,10 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
           <Text style={styles.heading}>Move: archive the source</Text>
           <Text style={styles.muted}>Paseo will archive the source workspace, its agents, and its terminals. If Paseo manages its worktree, it may delete the source files. A worktree created by Transfer stays on disk after archiving.</Text>
           <Button label={confirmed ? '✓ I confirm source archiving' : 'I confirm source archiving'} selected={confirmed} disabled={locked} onPress={() => setConfirmed(value => !value)} />
-          <Button label="Verify and archive the source" danger disabled={locked || !confirmed || job.sourceArchived} onPress={() => void perform(async () => {
-            setJob(await archive({ id: job.id, confirm: true })); setConfirmed(false);
+          <Button label="Verify and archive the source" danger disabled={locked || !confirmed || job.sourceArchived || !connectedTransfer.has(job.id)} onPress={() => void perform(async () => {
+            setJob(await connectedTransfer.archive(job.id)); setConfirmed(false);
           })} />
+          {!connectedTransfer.has(job.id) && <Text style={styles.muted}>Source archiving is unavailable after reloading Paseo. The source is preserved.</Text>}
           <Text style={styles.muted}>Both copies must be unchanged. Close the source terminals. Ignored files block archiving.</Text>
         </>}
       </>}
@@ -234,9 +237,9 @@ function TransferForm({ theme, layout, params, host, navigation }: PluginScreenP
     </View>}
     {!running && <View style={styles.card}>
       <Text style={styles.heading}>Resume tracking</Text>
-      <Text style={styles.muted}>On the same source host, enter the ID of a transfer from the last hour. Tracking does not survive a plugin restart.</Text>
+      <Text style={styles.muted}>On the same source host, enter the ID of a transfer from the last hour. After reloading Paseo, a verified destination cannot be checked again for source archiving. Check both hosts before retrying.</Text>
       <TextInput accessibilityLabel="Transfer ID" value={jobId} onChangeText={setJobId} editable={!busy} autoCapitalize="none" autoCorrect={false} style={styles.input} />
-      <Button label="Load transfer status" disabled={busy || !jobId} onPress={() => void perform(async () => { setJob(await status({ id: jobId })); setConfirmed(false); })} />
+      <Button label="Load transfer status" disabled={busy || !jobId} onPress={() => void perform(async () => { setJob(connectedTransfer.has(jobId) ? connectedTransfer.status(jobId) : await status({ id: jobId })); setConfirmed(false); })} />
     </View>}
   </ScrollView>;
 }
