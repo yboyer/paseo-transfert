@@ -7,9 +7,9 @@ function TransferItem({ currentScreen, openScreen }: PluginSidebarItemProps) {
 }
 export default function contribute(client: PluginClientContext) {
   const cleanups = [
-    client.addScreen({ id: 'transfer', title: 'Transfert', Component: TransferScreen }),
-    client.addSidebarHeaderItem({ id: 'transfer', title: 'Transfert', Component: TransferItem }),
-    client.addCommandCenterItem({ id: 'transfer-workspace', title: 'Transférer ce workspace', icon: 'ArrowRightLeft', context: 'workspace',
+    client.addScreen({ id: 'transfer', title: 'Transfer', Component: TransferScreen }),
+    client.addSidebarHeaderItem({ id: 'transfer', title: 'Transfer', Component: TransferItem }),
+    client.addCommandCenterItem({ id: 'transfer-workspace', title: 'Transfer this workspace', icon: 'ArrowRightLeft', context: 'workspace',
       onSelect: ({ workspace, openScreen }) => openScreen({ screenId: 'transfer', params: { workspaceId: workspace.id } }),
     }),
   ];
@@ -19,7 +19,7 @@ export default function contribute(client: PluginClientContext) {
   function add(workspaceId: string) {
     if (buttons.has(workspaceId) || disposed) return;
     buttons.set(workspaceId, client.addHeaderButton({ id: 'transfer-workspace', workspaceId, button: {
-      title: 'Transférer ce workspace', label: 'Transfert', icon: 'ArrowRightLeft',
+      title: 'Transfer this workspace', label: 'Transfer', icon: 'ArrowRightLeft',
       behavior: { kind: 'action', onPress: () => client.openScreen({ screenId: 'transfer', params: { workspaceId } }) },
     } }));
   }

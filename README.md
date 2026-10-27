@@ -1,108 +1,108 @@
-# Paseo Transfert
+# Paseo Transfer
 
-Copiez ou déplacez un workspace Git entre deux hôtes Paseo.
+Copy or move a Git workspace between two Paseo hosts.
 
-Le plugin crée un nouveau dossier sur l’hôte de destination. Ce dossier contient un dépôt Git et un worktree. Le plugin enregistre ensuite ce worktree comme workspace Paseo.
+The plugin creates a new folder on the destination host. This folder contains a Git repository and a worktree. The plugin then registers this worktree as a Paseo workspace.
 
 ## Installation
 
-Prérequis sur les deux hôtes :
+Requirements on both hosts:
 
-- Paseo **0.13.x** ;
-- Node.js **22 ou plus récent** ;
-- Git ;
-- le plugin activé dans **Settings → Plugins**.
+- Paseo **0.13.x**;
+- Node.js **22 or later**;
+- Git;
+- the plugin enabled in **Settings → Plugins**.
 
-Exécutez sur chaque hôte :
+Run on each host:
 
 ```sh
 paseo plugin add git:yboyer/paseo-transfert
 ```
 
-Le plugin utilise les connexions enregistrées **sur le daemon source**. Une connexion visible uniquement dans votre application ne suffit pas. Connectez l’hôte de destination au daemon source avec les réglages de Paseo ou sa commande `paseo host add`. Le plugin ne demande pas de configuration SSH supplémentaire.
+The plugin uses connections registered **on the source daemon**. A connection visible only in your app is not enough. Connect the destination host to the source daemon through the Paseo settings or the `paseo host add` command. The plugin does not require additional SSH configuration.
 
-Les dépendances de transport sont installées avec `npm ci --omit=dev --ignore-scripts`. Paseo doit pouvoir accéder au registre npm lors de l’installation.
+Transport dependencies are installed with `npm ci --omit=dev --ignore-scripts`. Paseo needs access to the npm registry during installation.
 
-## Utilisation
+## Usage
 
-1. Ouvrez le workspace source et cliquez sur **Transfert** dans son en-tête. Vous pouvez aussi utiliser la barre latérale ou le Command Center.
-2. Sélectionnez l’hôte de destination.
-3. Indiquez un dossier parent **existant sur cet hôte** et le nom d’un nouveau dossier.
-4. Choisissez **Copier** ou **Déplacer**.
-5. Vérifiez l’aperçu et confirmez la copie.
-6. Pour déplacer le workspace, attendez la vérification, puis confirmez l’archivage de la source.
+1. Open the source workspace and click **Transfer** in its header. You can also use the sidebar or the Command Center.
+2. Select the destination host.
+3. Enter a parent directory that **already exists on that host** and a new folder name.
+4. Choose **Copy** or **Move**.
+5. Review the preview and confirm the copy.
+6. To move the workspace, wait for verification, then confirm source archiving.
 
-Exemple de destination :
+Example destination:
 
 ```text
-/Users/vous/Code/mon-projet-local/
-├── repository.git/    # Dépôt Git avec l’historique
-└── worktree/          # Code du workspace Paseo
+/Users/you/Code/my-local-project/
+├── repository.git/    # Git repository with history
+└── worktree/          # Paseo workspace code
 ```
 
-Le dossier de destination doit être libre. Aucun dossier existant n’est écrasé. Un retour vers l’hôte initial utilise aussi un nouveau dossier. Les copies restent indépendantes.
+The destination folder must not exist. Existing folders are never overwritten. Returning to the original host also requires a new folder. Copies remain independent.
 
-## Contenu transféré
+## Transferred content
 
-- Historique Git accessible depuis les références locales, branches, tags et HEAD.
-- Fichiers suivis dans leur état actuel, y compris les suppressions.
-- Modifications préparées pour commit, conservées séparément des autres modifications.
-- Fichiers non suivis et non ignorés par Git.
-- Fichiers binaires, permissions d’exécution et liens symboliques internes au projet.
+- Git history reachable from local references, branches, tags, and HEAD.
+- Tracked files in their current state, including deletions.
+- Staged changes, preserved separately from unstaged changes.
+- Untracked files that are not ignored by Git.
+- Binary files, executable permissions, and symbolic links within the project.
 
-Les fichiers ignorés par Git ne sont pas copiés. Cette exclusion concerne les fichiers actuels, **pas les versions déjà présentes dans l’historique Git**. L’aperçu liste les chemins inclus et les fichiers ou dossiers ignorés.
+Git-ignored files are not copied. This exclusion applies to current files, **not to versions already in Git history**. The preview lists included paths and ignored files or folders.
 
-Les conversations, identifiants des fournisseurs, réglages MCP et configurations locales Git ne sont pas transférés. Le dépôt reçu n’a pas de remote configuré. Les fichiers de configuration suivis dans Git restent des fichiers du projet et sont copiés comme les autres.
+Conversations, provider credentials, MCP settings, and local Git configuration are not transferred. The received repository has no configured remote. Configuration files tracked by Git remain project files and are copied like other files.
 
-## Copier et déplacer
+## Copy and move
 
-**Copier** conserve la source.
+**Copy** preserves the source.
 
-**Déplacer** réalise d’abord la même copie. L’utilisateur confirme ensuite l’archivage dans Paseo. Le plugin vérifie à nouveau la source et la destination avant de demander cet archivage.
+**Move** first performs the same copy. The user then confirms archiving in Paseo. The plugin checks the source and destination again before requesting archiving.
 
-- Si Paseo gère le worktree source, son archivage peut supprimer ce worktree.
-- Pour un checkout local ou un worktree créé par Transfert, l’archivage retire le workspace de Paseo et conserve les fichiers sur disque. Le plugin ne supprime pas directement ces dossiers.
-- La présence de fichiers ou dossiers ignorés bloque le déplacement afin de prévenir leur perte.
-- Il faut arrêter les agents et fermer les terminaux source avant l’archivage.
+- If Paseo manages the source worktree, archiving may delete that worktree.
+- For a local checkout or a worktree created by Transfer, archiving removes the workspace from Paseo and keeps its files on disk. The plugin does not directly delete these folders.
+- Ignored files or folders block moving to prevent data loss.
+- Stop agents and close source terminals before archiving.
 
-Arrêtez également les éditeurs, scripts ou autres programmes qui écrivent dans le projet pendant l’opération. Le plugin ne peut pas verrouiller les programmes externes.
+Also stop editors, scripts, and other programs that write to the project during the operation. The plugin cannot lock external programs.
 
-## Contrôles et limites
+## Checks and limits
 
-Le transfert vérifie une somme SHA-256, l’état des fichiers restaurés et le contenu préparé pour commit. Il refuse les chemins dangereux, les liens symboliques externes, les collisions de casse et les destinations occupées.
+The transfer verifies a SHA-256 checksum, restored file contents, and staged changes. It rejects unsafe paths, external symbolic links, case collisions, and occupied destinations.
 
-Limites de la première version :
+First version limits:
 
-- Linux, macOS et WSL ; Windows natif n’est pas pris en charge.
-- Workspace placé à la racine d’un checkout Git avec au moins un commit.
-- Pas de submodules, de Git LFS ou de conflits Git non résolus.
-- 20 000 fichiers au maximum et une archive de transfert de 128 MiB au maximum. L’archive inclut l’historique et les données encodées en base64.
-- Pas de synchronisation automatique, de fusion avec une destination existante ou de reprise des conversations.
-- Le nouveau worktree utilise une branche `transfert/<identifiant>`. Les références d’origine restent dans le dépôt reçu.
-- Les hooks Git et les scripts de préparation du projet ne sont pas exécutés par le transfert.
+- Linux, macOS, and WSL; native Windows is not supported.
+- The workspace must point to the root of a Git checkout with at least one commit.
+- No submodules, Git LFS, or unresolved Git conflicts.
+- A maximum of 20,000 files and a transfer archive of up to 128 MiB. The archive includes history and base64-encoded data.
+- No automatic synchronization, merging into an existing destination, or conversation resuming.
+- The new worktree uses a `transfert/<id>` branch. Original references remain in the received repository.
+- The transfer does not run Git hooks or project setup scripts.
 
-Un aperçu expire après 15 minutes. Un changement de la source impose un nouvel aperçu. Le transfert continue si vous quittez l’écran, tant que les deux daemons et le plugin restent actifs.
+A preview expires after 15 minutes. Source changes require a new preview. The transfer continues if you leave the screen, as long as both daemons and the plugin remain running.
 
-L’identifiant de suivi permet de retrouver une opération sur le même hôte source pendant environ une heure. Le suivi et la confirmation d’archivage ne survivent pas au redémarrage du plugin. Les copies terminées restent sur disque.
+The tracking ID lets you retrieve an operation on the same source host for about an hour. Tracking and source archiving confirmation do not survive a plugin restart. Completed copies remain on disk.
 
-En cas d’échec, la source reste intacte. Un dossier partiel peut rester à destination. Vérifiez son contenu avant de le retirer. Une nouvelle tentative utilise un nouveau dossier. Le transfert ne reprend pas automatiquement les morceaux déjà reçus.
+If a transfer fails, the source stays intact. A partial folder may remain at the destination. Review its contents before removing it. Use a new folder for another attempt. The transfer does not automatically resume previously received chunks.
 
-## Développement
+## Development
 
 ```sh
 npm ci
 npm run check
 ```
 
-Essai complet avec deux daemons temporaires, sans utiliser vos hôtes habituels :
+Run a full test with two temporary daemons, without using your regular hosts:
 
 ```sh
 npm install --global @getpaseo/cli@0.13.0
 npm run test:e2e
 ```
 
-Cet essai installe le plugin, connecte les daemons, copie un vrai worktree, vérifie le workspace reçu, teste les refus d’archivage, puis archive un worktree source géré par Paseo.
+This test installs the plugin, connects the daemons, copies a real worktree, checks the received workspace, tests archive refusals, and then archives a source worktree managed by Paseo.
 
-Le transport Node de Paseo est isolé dans `server/connection.ts`. Il utilise l’identité locale du daemon et ses routes authentifiées. Le SDK ne fournit pas de méthode publique de RPC plugin entre hôtes. Le plugin utilise donc son client de bas niveau, fixé à la version 0.13.0. La plage Paseo reste limitée à 0.13.x jusqu’à vérification des versions suivantes.
+The Paseo Node transport is isolated in `server/connection.ts`. It uses the local daemon identity and its authenticated routes. The SDK does not expose a public method for cross-host plugin RPCs. The plugin therefore uses its low-level client, pinned to version 0.13.0. Paseo support is limited to 0.13.x until later versions are verified.
 
-Les tests automatisés couvrent le serveur et le transfert entre daemons. L’interface doit encore être vérifiée dans les clients Paseo desktop et mobile.
+Automated tests cover the server and transfers between daemons. The UI still needs verification in the Paseo desktop and mobile clients.

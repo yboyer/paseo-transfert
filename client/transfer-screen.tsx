@@ -96,37 +96,37 @@ export function TransferScreen({ theme, layout, params, host, navigation }: Plug
 
   return <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
     <View style={{ gap: 6 }}>
-      <Text style={styles.title}>Transfert</Text>
-      <Text style={styles.muted}>Copiez un workspace depuis {host.label} vers un autre hôte Paseo.</Text>
+      <Text style={styles.title}>Transfer</Text>
+      <Text style={styles.muted}>Copy a workspace from {host.label} to another Paseo host.</Text>
     </View>
     {!!error && <View accessibilityRole="alert" style={styles.card}><Text selectable style={{ ...styles.text, color: colors.statusDanger }}>{error}</Text></View>}
     {!job && <>
       <View style={styles.card}>
-        <Text style={styles.heading}>1. Workspace source</Text>
-        {loading && <Text style={styles.muted}>Chargement…</Text>}
-        {!loading && !sources.length && <Text style={styles.muted}>Aucun workspace Git disponible sur cet hôte.</Text>}
+        <Text style={styles.heading}>1. Source workspace</Text>
+        {loading && <Text style={styles.muted}>Loading…</Text>}
+        {!loading && !sources.length && <Text style={styles.muted}>No Git workspaces are available on this host.</Text>}
         {sources.map(source => <Pressable key={source.id} disabled={locked} accessibilityRole="button" accessibilityState={{ selected: workspaceId === source.id }}
           onPress={() => { setWorkspaceId(source.id); invalidate(); }} style={{ padding: 12, gap: 3, borderWidth: 1, borderColor: workspaceId === source.id ? colors.accent : colors.border, borderRadius: 8 }}>
           <Text style={styles.text}>{source.title}</Text><Text selectable style={styles.muted}>{source.directory}</Text>
         </Pressable>)}
-        <Text style={styles.muted}>Arrêtez les agents et les commandes qui modifient les fichiers avant le transfert.</Text>
+        <Text style={styles.muted}>Stop agents and commands that write files before transferring.</Text>
       </View>
       <View style={styles.card}>
         <Text style={styles.heading}>2. Destination</Text>
         <View style={styles.row}>{hosts.map(target => <Button key={target.serverId} label={target.label} selected={serverId === target.serverId} disabled={locked}
           onPress={() => { setServerId(target.serverId); setParent(''); invalidate(); }} />)}</View>
-        {!loading && !hosts.length && <Text style={styles.muted}>Connectez un autre hôte au daemon source dans Paseo. Installez Transfert sur les deux hôtes.</Text>}
-        <Text style={styles.text}>Dossier parent existant sur l’hôte de destination</Text>
-        <TextInput accessibilityLabel="Dossier parent de destination" value={parent} editable={!locked} onChangeText={value => { setParent(value); invalidate(); }} placeholder="/Users/vous/Code" placeholderTextColor={colors.foregroundMuted} autoCapitalize="none" autoCorrect={false} style={styles.input} />
-        <Text style={styles.text}>Nom du nouveau dossier</Text>
-        <TextInput accessibilityLabel="Nom du nouveau dossier" value={name} editable={!locked} onChangeText={value => { setName(value); invalidate(); }} placeholder="mon-projet-local" placeholderTextColor={colors.foregroundMuted} autoCapitalize="none" autoCorrect={false} style={styles.input} />
-        <Text style={styles.muted}>Ce dossier contiendra le dépôt Git et un worktree. Le plugin créera un workspace Paseo pour ce worktree.</Text>
+        {!loading && !hosts.length && <Text style={styles.muted}>Connect another host to the source daemon in Paseo. Install Transfer on both hosts.</Text>}
+        <Text style={styles.text}>Existing parent directory on the destination host</Text>
+        <TextInput accessibilityLabel="Destination parent directory" value={parent} editable={!locked} onChangeText={value => { setParent(value); invalidate(); }} placeholder="/Users/you/Code" placeholderTextColor={colors.foregroundMuted} autoCapitalize="none" autoCorrect={false} style={styles.input} />
+        <Text style={styles.text}>New folder name</Text>
+        <TextInput accessibilityLabel="New folder name" value={name} editable={!locked} onChangeText={value => { setName(value); invalidate(); }} placeholder="my-local-project" placeholderTextColor={colors.foregroundMuted} autoCapitalize="none" autoCorrect={false} style={styles.input} />
+        <Text style={styles.muted}>This folder will contain the Git repository and a worktree. The plugin will create a Paseo workspace for this worktree.</Text>
       </View>
       <View style={styles.card}>
         <Text style={styles.heading}>3. Action</Text>
-        <View style={styles.row}><Button label="Copier" selected={!move} disabled={locked} onPress={() => setMove(false)} /><Button label="Déplacer" selected={move} disabled={locked} onPress={() => setMove(true)} /></View>
-        <Text style={styles.muted}>{move ? 'Le plugin copie et vérifie les fichiers. Vous confirmerez ensuite l’archivage de la source.' : 'La source reste disponible. Les deux copies sont indépendantes.'}</Text>
-        <Button label={busy ? 'Préparation…' : 'Afficher l’aperçu'} disabled={locked || !workspaceId || !serverId || !parent || !name} onPress={() => void perform(async () => {
+        <View style={styles.row}><Button label="Copy" selected={!move} disabled={locked} onPress={() => setMove(false)} /><Button label="Move" selected={move} disabled={locked} onPress={() => setMove(true)} /></View>
+        <Text style={styles.muted}>{move ? 'The plugin copies and verifies the files. You will then confirm source archiving.' : 'The source remains available. The two copies are independent.'}</Text>
+        <Button label={busy ? 'Preparing…' : 'Show preview'} disabled={locked || !workspaceId || !serverId || !parent || !name} onPress={() => void perform(async () => {
           invalidate();
           const target = await inspect({ serverId, parent, name });
           const result = await prepare({ workspaceId });
@@ -134,53 +134,53 @@ export function TransferScreen({ theme, layout, params, host, navigation }: Plug
         })} />
       </View>
       {preview && destination && <View style={styles.card}>
-        <Text style={styles.heading}>Vérifiez le transfert</Text>
+        <Text style={styles.heading}>Review the transfer</Text>
         <Text selectable style={styles.text}>{preview.title} · {preview.branch} · {preview.head.slice(0, 12)}</Text>
-        <Text style={styles.text}>{preview.files.length} fichiers · {formatBytes(preview.bytes)}, historique Git inclus</Text>
-        <Text selectable style={styles.muted}>Source : {preview.directory}</Text>
-        <Text selectable style={styles.muted}>Destination : {destination.root}</Text>
-        <Text selectable style={styles.muted}>Worktree : {destination.worktreeParent}</Text>
-        <Text style={styles.muted}>Les modifications préparées pour commit sont conservées. Les conversations et les fichiers ignorés par Git sont exclus.</Text>
+        <Text style={styles.text}>{preview.files.length} files · {formatBytes(preview.bytes)}, including Git history</Text>
+        <Text selectable style={styles.muted}>Source: {preview.directory}</Text>
+        <Text selectable style={styles.muted}>Destination: {destination.root}</Text>
+        <Text selectable style={styles.muted}>Worktree: {destination.worktreeParent}</Text>
+        <Text style={styles.muted}>Staged changes are preserved. Conversations and Git-ignored files are excluded.</Text>
         {!!preview.ignored.length && <>
-          <Text style={{ ...styles.text, color: colors.statusWarning }}>{preview.ignored.length} fichiers ou dossiers ignorés. Le déplacement est bloqué pour éviter leur perte.</Text>
+          <Text style={{ ...styles.text, color: colors.statusWarning }}>{preview.ignored.length} ignored files or folders. Moving is blocked to prevent data loss.</Text>
           <ScrollView style={{ maxHeight: 130 }}>{preview.ignored.map(file => <Text key={file} selectable style={styles.muted}>{file}</Text>)}</ScrollView>
         </>}
-        <Text style={styles.text}>Fichiers inclus</Text>
+        <Text style={styles.text}>Included files</Text>
         <ScrollView style={{ maxHeight: 180 }}>{preview.files.map(file => <Text key={file} selectable style={styles.muted}>{file}</Text>)}</ScrollView>
-        <Text style={styles.muted}>L’aperçu expire après 15 minutes. Aucun dossier existant ne sera écrasé.</Text>
-        <Button label={move ? 'Copier avant déplacement' : 'Confirmer la copie'} selected disabled={locked || (move && preview.ignored.length > 0)} onPress={() => void perform(async () => {
+        <Text style={styles.muted}>The preview expires after 15 minutes. Existing folders will not be overwritten.</Text>
+        <Button label={move ? 'Copy before moving' : 'Confirm copy'} selected disabled={locked || (move && preview.ignored.length > 0)} onPress={() => void perform(async () => {
           const created = await start({ previewId: preview.id, serverId, parent, name });
           setJob(created); setJobId(created.id);
         })} />
       </View>}
     </>}
     {job && <View style={styles.card}>
-      <Text style={styles.heading}>{job.sourceArchived ? 'Déplacement terminé' : job.phase === 'complete' ? 'Copie vérifiée' : job.phase === 'failed' ? 'Transfert interrompu' : job.phase === 'restoring' ? 'Restauration et vérification…' : 'Transfert en cours…'}</Text>
+      <Text style={styles.heading}>{job.sourceArchived ? 'Move complete' : job.phase === 'complete' ? 'Copy verified' : job.phase === 'failed' ? 'Transfer interrupted' : job.phase === 'restoring' ? 'Restoring and verifying…' : 'Transferring…'}</Text>
       <Text style={styles.text}>{formatBytes(job.sent)} / {formatBytes(job.total)}</Text>
-      <Text selectable style={styles.muted}>Identifiant de suivi : {job.id}</Text>
-      <Text style={styles.muted}>Le transfert continue si vous quittez cet écran. Les deux daemons doivent rester actifs.</Text>
+      <Text selectable style={styles.muted}>Tracking ID: {job.id}</Text>
+      <Text style={styles.muted}>The transfer continues if you leave this screen. Both daemons must remain running.</Text>
       {!!job.error && <Text selectable style={{ ...styles.text, color: colors.statusDanger }}>{job.error}</Text>}
-      {job.phase === 'failed' && <Text style={styles.muted}>La source est conservée. Un dossier partiel peut rester à destination. Utilisez un nouveau dossier pour réessayer.</Text>}
+      {job.phase === 'failed' && <Text style={styles.muted}>The source is preserved. A partial folder may remain at the destination. Use a new folder to retry.</Text>}
       {job.receipt && <>
         <Text selectable style={styles.text}>{job.receipt.directory}</Text>
-        {!!navigation && <Button label="Ouvrir le workspace de destination" onPress={() => navigation.openWorkspace({ workspaceId: job.receipt!.workspaceId, serverId: job.destinationServerId })} />}
+        {!!navigation && <Button label="Open destination workspace" onPress={() => navigation.openWorkspace({ workspaceId: job.receipt!.workspaceId, serverId: job.destinationServerId })} />}
         {!job.sourceArchived && <>
-          <Text style={styles.heading}>Déplacer : archiver la source</Text>
-          <Text style={styles.muted}>Paseo archivera le workspace source, ses agents et ses terminaux. Si Paseo gère son worktree, il peut supprimer les fichiers source. Un worktree créé par Transfert reste sur disque après archivage.</Text>
-          <Button label={confirmed ? '✓ Je confirme l’archivage de la source' : 'Je confirme l’archivage de la source'} selected={confirmed} disabled={locked} onPress={() => setConfirmed(value => !value)} />
-          <Button label="Vérifier et archiver la source" danger disabled={locked || !confirmed || job.sourceArchived} onPress={() => void perform(async () => {
+          <Text style={styles.heading}>Move: archive the source</Text>
+          <Text style={styles.muted}>Paseo will archive the source workspace, its agents, and its terminals. If Paseo manages its worktree, it may delete the source files. A worktree created by Transfer stays on disk after archiving.</Text>
+          <Button label={confirmed ? '✓ I confirm source archiving' : 'I confirm source archiving'} selected={confirmed} disabled={locked} onPress={() => setConfirmed(value => !value)} />
+          <Button label="Verify and archive the source" danger disabled={locked || !confirmed || job.sourceArchived} onPress={() => void perform(async () => {
             setJob(await archive({ id: job.id, confirm: true })); setConfirmed(false);
           })} />
-          <Text style={styles.muted}>Les deux copies doivent être intactes. Fermez les terminaux source. La présence de fichiers ignorés bloque l’archivage.</Text>
+          <Text style={styles.muted}>Both copies must be unchanged. Close the source terminals. Ignored files block archiving.</Text>
         </>}
       </>}
-      {!running && <Button label="Nouveau transfert" disabled={busy} onPress={() => { setJob(null); setJobId(''); invalidate(); }} />}
+      {!running && <Button label="New transfer" disabled={busy} onPress={() => { setJob(null); setJobId(''); invalidate(); }} />}
     </View>}
     {!running && <View style={styles.card}>
-      <Text style={styles.heading}>Reprendre un suivi</Text>
-      <Text style={styles.muted}>Sur le même hôte source, utilisez l’identifiant d’un transfert de la dernière heure. Le suivi ne survit pas au redémarrage du plugin.</Text>
-      <TextInput accessibilityLabel="Identifiant du transfert" value={jobId} onChangeText={setJobId} editable={!busy} autoCapitalize="none" autoCorrect={false} style={styles.input} />
-      <Button label="Charger le suivi" disabled={busy || !jobId} onPress={() => void perform(async () => { setJob(await status({ id: jobId })); setConfirmed(false); })} />
+      <Text style={styles.heading}>Resume tracking</Text>
+      <Text style={styles.muted}>On the same source host, enter the ID of a transfer from the last hour. Tracking does not survive a plugin restart.</Text>
+      <TextInput accessibilityLabel="Transfer ID" value={jobId} onChangeText={setJobId} editable={!busy} autoCapitalize="none" autoCorrect={false} style={styles.input} />
+      <Button label="Load transfer status" disabled={busy || !jobId} onPress={() => void perform(async () => { setJob(await status({ id: jobId })); setConfirmed(false); })} />
     </View>}
   </ScrollView>;
 }

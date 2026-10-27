@@ -1,7 +1,7 @@
 {
   "id": "transfert",
-  "name": "Transfert",
-  "description": "Copiez ou déplacez vos workspaces Git entre deux hôtes Paseo.",
+  "name": "Transfer",
+  "description": "Copy or move Git workspaces between two Paseo hosts.",
   "requirements": {
     "paseo": ">=0.13.0 <0.14.0"
   },
