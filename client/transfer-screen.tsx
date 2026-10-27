@@ -1,5 +1,5 @@
 import type { PluginScreenProps } from '@getpaseo/plugin/client';
-import { usePaseo, useRpc } from '@getpaseo/plugin/client';
+import { usePaseo, useRpc, useWorkspace } from '@getpaseo/plugin/client';
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import {
@@ -10,7 +10,11 @@ import {
 function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
 function formatBytes(bytes: number) { return `${(bytes / 1024 / 1024).toFixed(1)} MiB`; }
 
-export function TransferScreen({ theme, layout, params, host, navigation }: PluginScreenProps) {
+export function TransferScreen(props: PluginScreenProps) {
+  return <TransferForm key={`${props.host.id}:${props.params.workspaceId || ''}`} {...props} />;
+}
+
+function TransferForm({ theme, layout, params, host, navigation }: PluginScreenProps) {
   const paseo = usePaseo();
   const targets = useRpc(targetsRpc);
   const prepare = useRpc(previewRpc);
@@ -18,6 +22,11 @@ export function TransferScreen({ theme, layout, params, host, navigation }: Plug
   const start = useRpc(startRpc);
   const status = useRpc(statusRpc);
   const archive = useRpc(archiveSourceRpc);
+  const currentWorkspace = useWorkspace(params.workspaceId || '', workspace => ({
+    id: workspace.id, title: workspace.title || workspace.name, directory: workspace.directory,
+    projectKind: workspace.projectKind, archivingAt: workspace.archivingAt,
+  }));
+  const contextual = !!params.workspaceId;
   const [sources, setSources] = useState<{ id: string; title: string; directory: string }[]>([]);
   const [hosts, setHosts] = useState<{ serverId: string; label: string }[]>([]);
   const [workspaceId, setWorkspaceId] = useState(params.workspaceId || '');
@@ -33,6 +42,10 @@ export function TransferScreen({ theme, layout, params, host, navigation }: Plug
   const [confirmed, setConfirmed] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const visibleSources = contextual
+    ? currentWorkspace?.projectKind === 'git' && !currentWorkspace.archivingAt ? [currentWorkspace] : []
+    : sources;
+  const sourceAvailable = visibleSources.some(source => source.id === workspaceId);
   const running = job?.phase === 'sending' || job?.phase === 'restoring';
   const locked = busy || !!running;
   const colors = theme.colors;
@@ -61,21 +74,24 @@ export function TransferScreen({ theme, layout, params, host, navigation }: Plug
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      const [available, first] = await Promise.all([targets({}), paseo.workspaces.list({ page: { limit: 100 } })]);
+      const available = await targets({});
+      if (cancelled) return;
+      setHosts(available);
+      if (available.length === 1) setServerId(available[0]!.serverId);
+      if (contextual) return;
+      const first = await paseo.workspaces.list({ page: { limit: 100 } });
       const workspaces = [...first.entries];
       let cursor = first.pageInfo.nextCursor;
-      while (cursor) {
+      while (cursor && !cancelled) {
         const page = await paseo.workspaces.list({ page: { limit: 100, cursor } });
         workspaces.push(...page.entries); cursor = page.pageInfo.nextCursor;
       }
       if (cancelled) return;
-      setHosts(available);
-      if (available.length === 1) setServerId(available[0]!.serverId);
       setSources(workspaces.filter(w => w.projectKind === 'git' && !w.archivingAt).map(w => ({ id: w.id, title: w.title || w.name, directory: w.workspaceDirectory ?? w.projectRootPath })));
     }
     void load().catch(failure => { if (!cancelled) setError(message(failure)); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [paseo, targets]);
+  }, [paseo, targets, contextual]);
   useEffect(() => {
     if (!job || !running) return;
     let cancelled = false;
@@ -104,11 +120,15 @@ export function TransferScreen({ theme, layout, params, host, navigation }: Plug
       <View style={styles.card}>
         <Text style={styles.heading}>1. Source workspace</Text>
         {loading && <Text style={styles.muted}>Loading…</Text>}
-        {!loading && !sources.length && <Text style={styles.muted}>No Git workspaces are available on this host.</Text>}
-        {sources.map(source => <Pressable key={source.id} disabled={locked} accessibilityRole="button" accessibilityState={{ selected: workspaceId === source.id }}
-          onPress={() => { setWorkspaceId(source.id); invalidate(); }} style={{ padding: 12, gap: 3, borderWidth: 1, borderColor: workspaceId === source.id ? colors.accent : colors.border, borderRadius: 8 }}>
-          <Text style={styles.text}>{source.title}</Text><Text selectable style={styles.muted}>{source.directory}</Text>
-        </Pressable>)}
+        {!loading && !visibleSources.length && <Text style={styles.muted}>{contextual ? 'The current workspace is unavailable for transfer.' : 'No Git workspaces are available on this host.'}</Text>}
+        {visibleSources.map(source => contextual
+          ? <View key={source.id} style={{ padding: 12, gap: 3, borderWidth: 1, borderColor: colors.border, borderRadius: 8 }}>
+              <Text style={styles.text}>{source.title}</Text><Text selectable style={styles.muted}>{source.directory}</Text>
+            </View>
+          : <Pressable key={source.id} disabled={locked} accessibilityRole="button" accessibilityState={{ selected: workspaceId === source.id }}
+              onPress={() => { setWorkspaceId(source.id); invalidate(); }} style={{ padding: 12, gap: 3, borderWidth: 1, borderColor: workspaceId === source.id ? colors.accent : colors.border, borderRadius: 8 }}>
+              <Text style={styles.text}>{source.title}</Text><Text selectable style={styles.muted}>{source.directory}</Text>
+            </Pressable>)}
         <Text style={styles.muted}>Stop agents and commands that write files before transferring.</Text>
       </View>
       <View style={styles.card}>
@@ -126,7 +146,7 @@ export function TransferScreen({ theme, layout, params, host, navigation }: Plug
         <Text style={styles.heading}>3. Action</Text>
         <View style={styles.row}><Button label="Copy" selected={!move} disabled={locked} onPress={() => setMove(false)} /><Button label="Move" selected={move} disabled={locked} onPress={() => setMove(true)} /></View>
         <Text style={styles.muted}>{move ? 'The plugin copies and verifies the files. You will then confirm source archiving.' : 'The source remains available. The two copies are independent.'}</Text>
-        <Button label={busy ? 'Preparing…' : 'Show preview'} disabled={locked || !workspaceId || !serverId || !parent || !name} onPress={() => void perform(async () => {
+        <Button label={busy ? 'Preparing…' : 'Show preview'} disabled={locked || !sourceAvailable || !serverId || !parent || !name} onPress={() => void perform(async () => {
           invalidate();
           const target = await inspect({ serverId, parent, name });
           const result = await prepare({ workspaceId });

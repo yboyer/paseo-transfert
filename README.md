@@ -26,6 +26,7 @@ Transport dependencies are installed with `npm ci --omit=dev --ignore-scripts`. 
 ## Usage
 
 1. Open the source workspace and click **Transfer** in its header. You can also use the sidebar or the Command Center.
+   When opened from a workspace header or its Command Center action, Transfer shows only that workspace. The sidebar entry lets you choose a workspace.
 2. Select the destination host.
 3. Enter a parent directory that **already exists on that host** and a new folder name.
 4. Choose **Copy** or **Move**.
