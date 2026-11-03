@@ -23,7 +23,7 @@
   "devDependencies": {
     "@getpaseo/plugin": "0.13.0",
     "@tanstack/react-query": "^5.90.11",
-    "@types/node": "22.20.5",
+    "@types/node": "26.6.6",
     "@types/react": "~19.2.0",
     "@types/react-test-renderer": "19.1.0",
     "esbuild": "0.28.2",
