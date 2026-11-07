@@ -23,6 +23,7 @@
   "devDependencies": {
     "@getpaseo/plugin": "0.13.0",
     "@tanstack/react-query": "^5.90.11",
+    "@tsconfig/node26": "26.0.1",
     "@types/node": "26.6.6",
     "@types/react": "~19.2.0",
     "@types/react-test-renderer": "19.1.0",
@@ -31,7 +32,7 @@
     "react-native": "0.81.5",
     "react-test-renderer": "19.1.0",
     "tsx": "4.23.15",
-    "typescript": "^5.9.3",
+    "typescript": "6.0.3",
     "zod": "^4.4.3"
   },
   "type": "module",
